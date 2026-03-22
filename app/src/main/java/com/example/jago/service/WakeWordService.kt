@@ -31,9 +31,24 @@ class WakeWordService : Service() {
         var isServiceRunning = false
     }
 
-    private var tflite: Interpreter? = null
+    // 3-model openWakeWord pipeline
+    private var melModel: Interpreter? = null
+    private var embeddingModel: Interpreter? = null
+    private var wakeWordModel: Interpreter? = null
+
+    // Pipeline state
     private var isDetecting = false
-    private var audioBuffer = ShortArray(1280) // will be dynamically resized
+    private var audioRecord: AudioRecord? = null
+    private var audioThread: Thread? = null
+
+    // Rolling buffers
+    private val melFrameBuffer = ArrayDeque<FloatArray>()
+    private val embeddingBuffer = ArrayDeque<FloatArray>()
+
+    // Pipeline constants
+    private val CHUNK_SIZE = 1280          // 80ms at 16kHz
+    private val MEL_FRAMES_NEEDED = 76     // mel frames per embedding
+    private val EMBEDDING_FRAMES_NEEDED = 16 // embeddings per wake word decision
     
     private var speechAdapter: SpeechAdapter? = null
     private var actionExecutor: ActionExecutor? = null
@@ -73,146 +88,158 @@ class WakeWordService : Service() {
 
     private fun initWakeWord() {
         try {
-            val model = FileUtil.loadMappedFile(this, "jagoo.tflite")
-            tflite = Interpreter(model)
-            
-            val numElements = tflite!!.getInputTensor(0).shape().fold(1) { acc, i -> acc * i }
-            if (numElements > 0) {
-                audioBuffer = ShortArray(numElements)
+            // Mel model needs manual input resize before allocating
+            val melOptions = Interpreter.Options().apply {
+                setNumThreads(2)
             }
+            melModel = Interpreter(FileUtil.loadMappedFile(this, "melspectrogram.tflite"), melOptions)
+            melModel?.resizeInput(0, intArrayOf(1, 1280))  // ← THIS is the fix
+            melModel?.allocateTensors()                     // ← manually allocate after resize
+
+            embeddingModel = Interpreter(FileUtil.loadMappedFile(this, "embedding_model.tflite"))
+            wakeWordModel = Interpreter(FileUtil.loadMappedFile(this, "jagoo.tflite"))
             
             isDetecting = true
             startAudioCapture()
-            Log.d("Jago", "TFLite WakeWord initialized with buffer size $numElements")
+            Log.d("Jago", "openWakeWord pipeline initialized")
         } catch (e: Exception) {
-            Log.e("Jago", "Failed to init TFLite model", e)
+            Log.e("Jago", "Failed to init wake word models", e)
         }
     }
 
     private fun startAudioCapture() {
-        val sampleRate = 16000
-        val chunkSize = 1280  // 80ms per chunk
-        val windowSize = audioBuffer.size  // full model input size
-        
-        // How many chunks to wait between inferences (~every 400ms)
-        val inferenceEveryNChunks = 5
-        var chunkCount = 0
-
-        // Cooldown after detection to prevent double triggers
-        var cooldownFrames = 0
-        val cooldownAfterDetection = 20 // ~1.6 seconds
-
         val minBufferSize = AudioRecord.getMinBufferSize(
-            sampleRate,
+            16000,
             AudioFormat.CHANNEL_IN_MONO,
             AudioFormat.ENCODING_PCM_16BIT
         )
-        
+
         try {
-            val recorder = AudioRecord(
+            audioRecord = AudioRecord(
                 MediaRecorder.AudioSource.MIC,
-                sampleRate,
+                16000,
                 AudioFormat.CHANNEL_IN_MONO,
                 AudioFormat.ENCODING_PCM_16BIT,
-                maxOf(chunkSize * 2, minBufferSize)
+                maxOf(CHUNK_SIZE * 2, minBufferSize)
             )
 
-            if (recorder.state != AudioRecord.STATE_INITIALIZED) {
-                Log.e("Jago", "AudioRecord init failed")
+            if (audioRecord?.state != AudioRecord.STATE_INITIALIZED) {
+                Log.e("Jago", "AudioRecord failed to initialize")
                 return
             }
 
-            recorder.startRecording()
-
-            Thread {
-                val chunkBuffer = ShortArray(chunkSize)
-
-                while (isServiceRunning) {
-                    val read = recorder.read(chunkBuffer, 0, chunkSize)
-                    if (read <= 0 || !isDetecting) continue
-
-                    // Slide window
-                    System.arraycopy(audioBuffer, read, audioBuffer, 0, windowSize - read)
-                    System.arraycopy(chunkBuffer, 0, audioBuffer, windowSize - read, read)
-
-                    chunkCount++
-
-                    // Cooldown — skip inference right after a detection
-                    if (cooldownFrames > 0) {
-                        cooldownFrames--
-                        continue
-                    }
-
-                    // Only run inference every 5 chunks (~400ms)
-                    if (chunkCount % inferenceEveryNChunks != 0) continue
-
-                    val scores = runInference(audioBuffer)
-                    if (scores.isEmpty()) continue
-
-                    val score = if (scores.size > 1) scores[1] else scores[0]
-
-                    if (score > 0.2f) {
-                        Log.d("Jago", "Score: $score")
-                    }
-
-                    if (score > 0.85f) {
-                        Log.d("Jago", "Wake word DETECTED! Score: $score")
-                        isDetecting = false
-                        cooldownFrames = cooldownAfterDetection
-                        audioBuffer.fill(0)
-                        Handler(Looper.getMainLooper()).post { showOverlay() }
-                    }
-                }
-
-                recorder.stop()
-                recorder.release()
-            }.start()
+            audioRecord?.startRecording()
         } catch (e: SecurityException) {
             Log.e("Jago", "Missing MICROPHONE permission", e)
             Handler(Looper.getMainLooper()).post {
                 JagoTTS.speak("I need microphone permission to listen for the wake word.")
             }
-        } catch (e: Exception) {
-            Log.e("Jago", "Audio capture error", e)
+            return
         }
-    }
 
-    private fun runInference(audio: ShortArray): FloatArray {
-        val inputBuffer = java.nio.ByteBuffer.allocateDirect(audio.size * 4)
-        inputBuffer.order(java.nio.ByteOrder.nativeOrder())
-        val floatInput = inputBuffer.asFloatBuffer()
-        for (i in audio.indices) {
-            floatInput.put(audio[i] / 32768f)
-        }
-        inputBuffer.rewind()
-        
-        val outputTensor = tflite?.getOutputTensor(0) ?: return FloatArray(0)
-        val outShape = outputTensor.shape()
-        val numElements = outShape.fold(1) { acc, i -> acc * i }.coerceAtLeast(1)
-        
-        val outputBuffer = java.nio.ByteBuffer.allocateDirect(numElements * 4)
-        outputBuffer.order(java.nio.ByteOrder.nativeOrder())
-        
-        try {
-            tflite?.run(inputBuffer, outputBuffer)
-            outputBuffer.rewind()
-            
-            val floatOutput = outputBuffer.asFloatBuffer()
-            val result = FloatArray(numElements)
-            for (i in 0 until numElements) {
-                result[i] = floatOutput.get(i)
+        audioThread = Thread {
+            val chunkBuffer = ShortArray(CHUNK_SIZE)
+            var cooldownFrames = 0
+
+            while (isServiceRunning) {
+                val read = audioRecord?.read(chunkBuffer, 0, CHUNK_SIZE) ?: break
+                if (read <= 0 || !isDetecting) continue
+
+                if (cooldownFrames > 0) {
+                    cooldownFrames--
+                    continue
+                }
+
+                // STEP A — convert raw PCM to float [-1, 1]
+                val floatChunk = FloatArray(CHUNK_SIZE) { chunkBuffer[it] / 32768f }
+
+                // STEP B — melspectrogram model
+                // Input:  [1, 1280] floats
+                // Output: [1, 1, 32, 32] — 32 mel frames × 32 bins
+                val melInput = Array(1) { floatChunk }
+                val melOutput = Array(1) { Array(1) { Array(32) { FloatArray(32) } } }
+                try {
+                    melModel?.run(melInput, melOutput)
+                } catch (e: Exception) {
+                    Log.e("Jago", "Mel model error: ${e.message}")
+                    continue
+                }
+
+                // STEP C — normalize and push mel frames into rolling buffer
+                // openWakeWord normalization: (value / 10.0) + 2.0
+                for (frameIdx in 0 until 32) {
+                    val melFrame = FloatArray(32) { binIdx ->
+                        (melOutput[0][0][frameIdx][binIdx] / 10f) + 2f
+                    }
+                    melFrameBuffer.addLast(melFrame)
+                }
+                while (melFrameBuffer.size > MEL_FRAMES_NEEDED) {
+                    melFrameBuffer.removeFirst()
+                }
+
+                // Need 76 mel frames before we can run embedding model
+                if (melFrameBuffer.size < MEL_FRAMES_NEEDED) continue
+
+                // STEP D — embedding model
+                // Input:  [1, 76, 32, 1]
+                // Output: [1, 1, 1, 96] — single 96-dim embedding vector
+                val embInput = Array(1) {
+                    Array(MEL_FRAMES_NEEDED) { frameIdx ->
+                        Array(32) { binIdx ->
+                            FloatArray(1) { melFrameBuffer[frameIdx][binIdx] }
+                        }
+                    }
+                }
+                val embOutput = Array(1) { Array(1) { Array(1) { FloatArray(96) } } }
+                try {
+                    embeddingModel?.run(embInput, embOutput)
+                } catch (e: Exception) {
+                    Log.e("Jago", "Embedding model error: ${e.message}")
+                    continue
+                }
+
+                // STEP E — push embedding into rolling buffer
+                embeddingBuffer.addLast(embOutput[0][0][0])
+                while (embeddingBuffer.size > EMBEDDING_FRAMES_NEEDED) {
+                    embeddingBuffer.removeFirst()
+                }
+
+                // Need 16 embeddings before we can score wake word
+                if (embeddingBuffer.size < EMBEDDING_FRAMES_NEEDED) continue
+
+                // STEP F — wake word model
+                // Input:  [1, 16, 96]
+                // Output: [1, 1] — score 0.0 to 1.0
+                val wwInput = Array(1) {
+                    Array(EMBEDDING_FRAMES_NEEDED) { i -> embeddingBuffer[i] }
+                }
+                val wwOutput = Array(1) { FloatArray(1) }
+                try {
+                    wakeWordModel?.run(wwInput, wwOutput)
+                } catch (e: Exception) {
+                    Log.e("Jago", "Wake word model error: ${e.message}")
+                    continue
+                }
+
+                val score = wwOutput[0][0]
+                if (score > 0.1f) Log.d("Jago", "Wake word score: $score")
+
+                if (score > 0.5f) {
+                    Log.d("Jago", "JAGO DETECTED! Score: $score")
+                    isDetecting = false
+                    cooldownFrames = 30
+                    melFrameBuffer.clear()
+                    embeddingBuffer.clear()
+                    Handler(Looper.getMainLooper()).post { showOverlay() }
+                }
             }
-            return result
-        } catch (e: Exception) {
-            val msg = e.message ?: "Unknown"
-            Log.e("Jago", "Inference crashed: $msg", e)
-            isDetecting = false
-            Handler(Looper.getMainLooper()).post {
-                val shapeErr = if (msg.contains("shape") || msg.contains("size")) "shape mismatch" else "type mismatch"
-                JagoTTS.speak("Inference error due to $shapeErr")
-            }
+
+            audioRecord?.stop()
+            audioRecord?.release()
+            audioRecord = null
         }
-        return FloatArray(0)
+
+        audioThread?.start()
     }
 
     private fun showOverlay() {
@@ -441,9 +468,11 @@ class WakeWordService : Service() {
 
     private fun resumeWakeWord() {
         serviceScope.launch {
-            delay(1500) // wait 1.5s before listening again
-            audioBuffer.fill(0)
+            delay(1500)
+            melFrameBuffer.clear()
+            embeddingBuffer.clear()
             isDetecting = true
+            Log.d("Jago", "Wake word detection resumed")
         }
     }
 
@@ -451,7 +480,13 @@ class WakeWordService : Service() {
         super.onDestroy()
         isServiceRunning = false
         isDetecting = false
-        tflite?.close()
+        audioRecord?.stop()
+        audioRecord?.release()
+        audioRecord = null
+        audioThread?.interrupt()
+        melModel?.close()
+        embeddingModel?.close()
+        wakeWordModel?.close()
         speechAdapter?.destroy()
         actionExecutor?.shutdown()
         serviceScope.cancel()
