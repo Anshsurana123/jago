@@ -1,9 +1,9 @@
 <resources>
-    <string name="app_name">Jarvis Assistant</string>
+    <string name="app_name">Jago Assistant</string>
     <string name="permission_rationale">This app needs microphone access to listen for commands and contact access to make calls.</string>
-    <string name="action_start">Start Jarvis</string>
-    <string name="action_stop">Stop Jarvis</string>
+    <string name="action_start">Start Jago</string>
+    <string name="action_stop">Stop Jago</string>
     <string name="status_listening">Listening...</string>
     <string name="status_idle">Idle</string>
-    <string name="accessibility_service_description">Enables Jarvis to capture screenshots via voice commands.</string>
+    <string name="accessibility_service_description">Enables Jago to capture screenshots via voice commands.</string>
 </resources>

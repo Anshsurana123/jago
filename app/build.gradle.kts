@@ -12,11 +12,10 @@ val localPropertiesFile = rootProject.file("local.properties")
 if (localPropertiesFile.exists()) {
     localProperties.load(FileInputStream(localPropertiesFile))
 }
-val porcupineAccessKey = localProperties.getProperty("PORCUPINE_ACCESS_KEY") ?: ""
 val geminiApiKey = localProperties.getProperty("GEMINI_API_KEY") ?: ""
 
 android {
-    namespace = "com.example.jarvis"
+    namespace = "com.example.jago"
     compileSdk = 34
 
     kotlin {
@@ -24,7 +23,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.example.jarvis"
+        applicationId = "com.example.jago"
         minSdk = 26
         targetSdk = 34
         versionCode = 1
@@ -32,7 +31,6 @@ android {
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         
-        buildConfigField("String", "PORCUPINE_ACCESS_KEY", "\"$porcupineAccessKey\"")
         buildConfigField("String", "GEMINI_API_KEY", "\"$geminiApiKey\"")
     }
 
@@ -69,8 +67,9 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.6.2")
 
-    // Picovoice Porcupine
-    implementation("ai.picovoice:porcupine-android:3.0.1") 
+    // TensorFlow Lite
+    implementation("org.tensorflow:tensorflow-lite:2.14.0")
+    implementation("org.tensorflow:tensorflow-lite-support:0.4.4") // Adding support for FileUtil
 
     // Google AI (Gemini)
     implementation("com.google.ai.client.generativeai:generativeai:0.9.0")
