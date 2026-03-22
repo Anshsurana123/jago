@@ -308,21 +308,40 @@ class WakeWordService : Service() {
             return
         }
 
-        // Detect translation triggers BEFORE parsing
-        val hindiTriggers = listOf("hindi mai", "hindi mein", "hindi me",
-            "hindi main", "hindi mein bhejo", "hindi mai bhejo")
-        val englishTriggers = listOf("in english", "english mein", "english mai",
-            "english me", "english main", "english mein bhejo")
+        // Hinglish variations + what en-IN STT actually transcribes
+        val hindiTriggers = listOf(
+            // Hinglish (user speaks Hindi-style)
+            "hindi mai", "hindi mein", "hindi me", "hindi main",
+            "hindi mein bhejo", "hindi mai bhejo",
+            "hindi mein likho", "hindi mein type karo",
+            // English transcription (what STT returns when it hears "hindi mai")
+            "in hindi", "send in hindi", "hindi language",
+            "translate to hindi", "hindi script", "devanagari"
+        )
+        val englishTriggers = listOf(
+            // Hinglish (user speaks Hindi-style)
+            "in english", "english mein", "english mai",
+            "english me", "english main", "english mein bhejo",
+            "english mai bhejo", "english mein likho",
+            // English transcription (what STT returns)
+            "send in english", "english language",
+            "translate to english", "proper english", "english script"
+        )
 
-        val wantsHindi = hindiTriggers.any { translatedText.contains(it) }
-        val wantsEnglish = englishTriggers.any { translatedText.contains(it) }
+        val lowerText = translatedText.lowercase()
+        val wantsHindi = hindiTriggers.any { lowerText.contains(it.lowercase()) }
+        val wantsEnglish = englishTriggers.any { lowerText.contains(it.lowercase()) }
 
         // Strip trigger from text before parsing so parser doesn't get confused
         var cleanText = translatedText
         if (wantsHindi) {
-            hindiTriggers.forEach { cleanText = cleanText.replace(it, "").trim() }
+            hindiTriggers.forEach { trigger ->
+                cleanText = cleanText.replace(trigger, "", ignoreCase = true).trim()
+            }
         } else if (wantsEnglish) {
-            englishTriggers.forEach { cleanText = cleanText.replace(it, "").trim() }
+            englishTriggers.forEach { trigger ->
+                cleanText = cleanText.replace(trigger, "", ignoreCase = true).trim()
+            }
         }
 
         val commands = commandParser.parse(cleanText)
