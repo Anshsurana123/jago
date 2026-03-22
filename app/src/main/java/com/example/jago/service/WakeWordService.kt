@@ -246,6 +246,10 @@ class WakeWordService : Service() {
     }
 
     private fun showOverlay() {
+        // Stop wake word mic capture FIRST before STT grabs it
+        isDetecting = false
+        audioRecord?.stop()
+        
         actionExecutor?.stopSpeaking()
         com.example.jago.ui.AssistantUIBridge.updateStatus("Listening...")
         com.example.jago.ui.AssistantUIBridge.updatePartial("")
@@ -255,7 +259,11 @@ class WakeWordService : Service() {
         }
         startActivity(intent)
         
-        startListening()
+        // Small delay to let AudioRecord fully release the mic
+        serviceScope.launch {
+            delay(300)
+            startListening()
+        }
     }
 
     private fun startListening() {
@@ -280,20 +288,26 @@ class WakeWordService : Service() {
     }
 
     private fun processCommand(text: String) {
+        // Translate Hindi/Hinglish to English before parsing
+        val translatedText = com.example.jago.logic.HindiTranslator.translate(text)
+        if (translatedText != text) {
+            Log.d("Jago", "Hindi translated: '$text' → '$translatedText'")
+        }
+        
         if (isWaitingForReminderTime) {
-            handleReminderTimeFollowUp(text)
+            handleReminderTimeFollowUp(translatedText)
             return
         }
         if (isWaitingForReminderMessage) {
-            handleReminderMessageFollowUp(text)
+            handleReminderMessageFollowUp(translatedText)
             return
         }
         if (isWaitingForAlarmTime) {
-            handleAlarmTimeFollowUp(text)
+            handleAlarmTimeFollowUp(translatedText)
             return
         }
 
-        val commands = commandParser.parse(text)
+        val commands = commandParser.parse(translatedText)
         val validCommands = commands.filter { it.type != CommandType.UNKNOWN }
 
         if (validCommands.isNotEmpty()) {
@@ -320,7 +334,7 @@ class WakeWordService : Service() {
         if (command.missingTime) {
              isWaitingForAlarmTime = true
              speechAdapter?.isFollowUpListening = true
-             JagoTTS.speakWithCallback("What time should I set the alarm?") {
+             JagoTTS.speakWithCallback("When should I set the alarm? / Alarm kab lagaun?") {
                  startListening()
              }
         } else {
@@ -353,7 +367,7 @@ class WakeWordService : Service() {
                 pendingTriggerMillis = command.triggerMillis
                 pendingFormattedTime = command.formattedTime
                 speechAdapter?.isFollowUpListening = true
-                JagoTTS.speakWithCallback("What should I remind you about?") {
+                JagoTTS.speakWithCallback("What should I remind you about? / Kya yaad dilana hai?") {
                     startListening()
                 }
             }
@@ -361,7 +375,7 @@ class WakeWordService : Service() {
                 isWaitingForReminderTime = true
                 pendingReminderMessage = command.messageBody
                 speechAdapter?.isFollowUpListening = true
-                JagoTTS.speakWithCallback("When should I remind you?") {
+                JagoTTS.speakWithCallback("When should I remind you? / Kab yaad dilana hai?") {
                     startListening()
                 }
             }
@@ -388,7 +402,7 @@ class WakeWordService : Service() {
             hideOverlayWithDelay()
         } else {
             speechAdapter?.isFollowUpListening = true
-            JagoTTS.speakWithCallback("I need a time for the reminder.") {
+            JagoTTS.speakWithCallback("I need a time for the reminder. / Samay batao.") {
                 startListening()
             }
         }
@@ -401,7 +415,7 @@ class WakeWordService : Service() {
         if (pendingTriggerMillis == null) {
             isWaitingForReminderTime = true
             speechAdapter?.isFollowUpListening = true
-            JagoTTS.speakWithCallback("When should I remind you?") {
+            JagoTTS.speakWithCallback("When should I remind you? / Kab yaad dilana hai?") {
                 startListening()
             }
         } else {
@@ -474,6 +488,8 @@ class WakeWordService : Service() {
             delay(1500)
             melFrameBuffer.clear()
             embeddingBuffer.clear()
+            // Restart audio capture since we stopped it for STT
+            audioRecord?.startRecording()
             isDetecting = true
             Log.d("Jago", "Wake word detection resumed")
         }

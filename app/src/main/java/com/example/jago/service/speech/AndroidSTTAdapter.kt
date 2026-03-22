@@ -33,7 +33,10 @@ class AndroidSTTAdapter(private val context: Context) : SpeechAdapter {
                 val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
                     putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
                     putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-                    putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
+                    putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3) // get top 3 results for better Hindi matching
+                    putExtra(RecognizerIntent.EXTRA_LANGUAGE, "hi-IN") // Hindi India
+                    putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, "hi-IN")
+                    putExtra("android.speech.extra.EXTRA_ADDITIONAL_LANGUAGES", arrayOf("en-IN", "en-US"))
                 }
                 
                 speechRecognizer?.startListening(intent)
@@ -112,11 +115,11 @@ class AndroidSTTAdapter(private val context: Context) : SpeechAdapter {
             Log.d("AndroidSTT", "onResults")
             val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
             if (!matches.isNullOrEmpty()) {
-                val text = matches[0]
-                Log.d("AndroidSTT", "Recognized: $text")
+                // Try each result — use first one that isn't empty
+                val text = matches.firstOrNull { it.isNotBlank() } ?: matches[0]
+                Log.d("AndroidSTT", "Recognized: $text (from ${matches.size} options)")
                 callback?.onResult(text)
             } else {
-                Log.d("AndroidSTT", "No matches found")
                 callback?.onError("No speech detected")
             }
             destroy() // Cleanup after success
