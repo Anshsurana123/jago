@@ -19,6 +19,7 @@ import com.example.jago.logic.Command
 import com.example.jago.logic.CommandParser
 import com.example.jago.logic.CommandType
 import com.example.jago.logic.JagoTTS
+import com.example.jago.logic.TranslationClient
 import com.example.jago.service.speech.AndroidSTTAdapter
 import com.example.jago.service.speech.SpeechAdapter
 import kotlinx.coroutines.*
@@ -291,7 +292,7 @@ class WakeWordService : Service() {
         // Translate Hindi/Hinglish to English before parsing
         val translatedText = com.example.jago.logic.HindiTranslator.translate(text)
         if (translatedText != text) {
-            Log.d("Jago", "Hindi translated: '$text' → '$translatedText'")
+            Log.d("Jago", "Hindi translated: '$text' \u2192 '$translatedText'")
         }
         
         if (isWaitingForReminderTime) {
@@ -307,13 +308,64 @@ class WakeWordService : Service() {
             return
         }
 
-        val commands = commandParser.parse(translatedText)
+        // Detect translation triggers BEFORE parsing
+        val hindiTriggers = listOf("hindi mai", "hindi mein", "hindi me",
+            "hindi main", "hindi mein bhejo", "hindi mai bhejo")
+        val englishTriggers = listOf("in english", "english mein", "english mai",
+            "english me", "english main", "english mein bhejo")
+
+        val wantsHindi = hindiTriggers.any { translatedText.contains(it) }
+        val wantsEnglish = englishTriggers.any { translatedText.contains(it) }
+
+        // Strip trigger from text before parsing so parser doesn't get confused
+        var cleanText = translatedText
+        if (wantsHindi) {
+            hindiTriggers.forEach { cleanText = cleanText.replace(it, "").trim() }
+        } else if (wantsEnglish) {
+            englishTriggers.forEach { cleanText = cleanText.replace(it, "").trim() }
+        }
+
+        val commands = commandParser.parse(cleanText)
         val validCommands = commands.filter { it.type != CommandType.UNKNOWN }
 
         if (validCommands.isNotEmpty()) {
             val command = validCommands.first()
             Log.d("WakeWordService", "Executing local command: ${command.type}")
-            
+
+            // If this is a message command AND user wants translation
+            if ((command.type == CommandType.SEND_WHATSAPP_MESSAGE) &&
+                (wantsHindi || wantsEnglish) &&
+                !command.messageBody.isNullOrEmpty()) {
+
+                // Translate async then send
+                serviceScope.launch {
+                    val originalBody = command.messageBody!!
+                    JagoTTS.speak("Translating message...")
+
+                    val translatedBody = if (wantsHindi) {
+                        TranslationClient.toDevanagari(originalBody)
+                    } else {
+                        TranslationClient.toEnglish(originalBody)
+                    }
+
+                    if (translatedBody != null) {
+                        Log.d("Jago", "Message translated: '$originalBody' \u2192 '$translatedBody'")
+                        val translatedCommand = command.copy(messageBody = translatedBody)
+                        actionExecutor?.execute(translatedCommand)
+                    } else {
+                        // Translation failed — send original as fallback
+                        JagoTTS.speakWithCallback(
+                            "Translation failed. Sending in original language."
+                        ) {
+                            actionExecutor?.execute(command)
+                        }
+                    }
+                    hideOverlayWithDelay()
+                }
+                return // Don't fall through to normal execution
+            }
+
+            // Normal command execution (no translation needed)
             when (command.type) {
                 CommandType.SET_REMINDER -> handleNewReminderCommand(command)
                 CommandType.SET_ALARM_CUSTOM, CommandType.SET_ALARM -> handleNewAlarmCommand(command)
@@ -325,8 +377,8 @@ class WakeWordService : Service() {
                 }
             }
         } else {
-            Log.d("WakeWordService", "No local command matched → Routing to Cerebras AI")
-            callCerebrasAsync(text)
+            Log.d("WakeWordService", "No local command matched \u2192 Routing to Cerebras AI")
+            callCerebrasAsync(cleanText)
         }
     }
 

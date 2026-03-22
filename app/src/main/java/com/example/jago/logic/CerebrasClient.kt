@@ -4,10 +4,9 @@ import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.BufferedReader
-import java.io.InputStreamReader
-import java.io.OutputStreamWriter
 import java.net.HttpURLConnection
 import java.net.URL
 
@@ -15,53 +14,68 @@ object CerebrasClient {
     private const val TAG = "CerebrasClient"
     private const val API_KEY = "csk-vtprwjpk3ehprrcmexxtmtcwk2pt5e2f5mvy4h9944ntj35x"
     private const val ENDPOINT = "https://api.cerebras.ai/v1/chat/completions"
+    private const val MODEL = "llama3.1-8b"
 
-    suspend fun askAI(query: String, useSmartModel: Boolean): String? = withContext(Dispatchers.IO) {
-        withTimeoutOrNull(8000L) {  // 8 second hard cap on entire request
-            val modelName = if (useSmartModel) "gpt-oss-120b" else "llama-3.3-70b"
-
-            try {
-                val url = URL(ENDPOINT)
-                val connection = url.openConnection() as HttpURLConnection
-                connection.requestMethod = "POST"
-                connection.setRequestProperty("Authorization", "Bearer $API_KEY")
-                connection.setRequestProperty("Content-Type", "application/json")
-                connection.doOutput = true
-                connection.connectTimeout = 3000   // fail fast on connect
-                connection.readTimeout = 5000      // tighter read timeout
-
-                val jsonBody = JSONObject().apply {
-                    put("model", modelName)
-                    val messages = org.json.JSONArray().apply {
-                        put(JSONObject().apply {
-                            put("role", "user")
-                            put("content", query)
-                        })
+    suspend fun askAI(query: String, useSmartModel: Boolean = true): String? =
+        withContext(Dispatchers.IO) {
+            withTimeoutOrNull(15000L) {
+                try {
+                    val connection = (URL(ENDPOINT).openConnection() as HttpURLConnection).apply {
+                        requestMethod = "POST"
+                        setRequestProperty("Authorization", "Bearer $API_KEY")
+                        setRequestProperty("Content-Type", "application/json")
+                        setRequestProperty("Accept", "application/json")
+                        doOutput = true
+                        connectTimeout = 8000
+                        readTimeout = 10000
                     }
-                    put("messages", messages)
-                }
 
-                OutputStreamWriter(connection.outputStream).use { writer ->
-                    writer.write(jsonBody.toString())
-                }
+                    val body = JSONObject().apply {
+                     put("model", MODEL)
+                     put("messages", JSONArray().apply {
+                      put(JSONObject().apply {
+                     put("role", "system")
+                  put("content", "You are a voice assistant. Always respond in 1-2 short sentences maximum. Be direct and concise. No long explanations.")
+                  })
+                put(JSONObject().apply {
+                 put("role", "user")
+                 put("content", query)
+             })
+            })
+              put("max_tokens", 100)  // ← short responses only
+             }.toString()
 
-                val responseCode = connection.responseCode
-                if (responseCode == HttpURLConnection.HTTP_OK) {
-                    val response = connection.inputStream.bufferedReader().use(BufferedReader::readText)
-                    val jsonResponse = JSONObject(response)
-                    jsonResponse.getJSONArray("choices")
-                        .getJSONObject(0)
-                        .getJSONObject("message")
-                        .getString("content")
-                } else {
-                    val errorStream = connection.errorStream?.bufferedReader()?.use(BufferedReader::readText)
-                    Log.e(TAG, "Cerebras API Error: Code $responseCode, Message: $errorStream")
+                    connection.outputStream.use { it.write(body.toByteArray()) }
+
+                    if (connection.responseCode == HttpURLConnection.HTTP_OK) {
+                        val response = connection.inputStream
+                            .bufferedReader()
+                            .use(BufferedReader::readText)
+                        JSONObject(response)
+                            .getJSONArray("choices")
+                            .getJSONObject(0)
+                            .getJSONObject("message")
+                            .getString("content")
+                            .trim()
+                    } else {
+                        val err = connection.errorStream?.bufferedReader()?.readText()
+                        Log.e(TAG, "Error ${connection.responseCode}: $err")
+                        null
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Cerebras failed", e)
                     null
                 }
-            } catch (e: Exception) {
-                Log.e(TAG, "Cerebras API Error", e)
-                null
             }
-        } // closes withTimeoutOrNull
-    }     // closes withContext
+        }
+
+    // Specialized function for message translation
+    suspend fun translateMessage(text: String, toHindi: Boolean): String? {
+        val prompt = if (toHindi) {
+            "Convert this Hinglish text to proper Hindi Devanagari script. Return ONLY the Hindi text, no explanation: $text"
+        } else {
+            "Convert this Hinglish text to proper grammatical English. Return ONLY the English text, no explanation: $text"
+        }
+        return askAI(prompt)
+    }
 }
