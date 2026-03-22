@@ -20,8 +20,10 @@ object HindiTranslator {
         "whatsapp karo" to "open whatsapp",
         "whatsapp bhejo" to "send whatsapp message",
         "whatsapp message bhejo" to "send whatsapp message",
-        "message bhejo" to "send message",
-        "message karo" to "send message",
+        "message bhejo" to "message",
+        "message karo" to "message",
+        "msg bhejo" to "message",
+        "msg karo" to "message",
 
         // === FLASHLIGHT ===
         "torch jalao" to "flashlight on",
@@ -154,22 +156,51 @@ object HindiTranslator {
         "thoda" to "",
         "yaar" to "",
         "bhai" to "",
-        "na" to ""
+        "na" to "",
+        "ko" to ""
     )
 
     fun translate(input: String): String {
+        if (!isHindi(input)) return input
+
         var text = input.lowercase().trim()
 
-        // Sort by length descending so longer phrases match first
-        // e.g. "awaaz band karo" matches before just "band karo"
-        val sortedMap = hindiToEnglish.entries.sortedByDescending { it.key.length }
+        // Message body markers — everything AFTER these stays untouched
+        val messageMarkers = listOf(
+            "message karo", "msg karo", "message bhejo", 
+            "whatsapp karo", "whatsapp bhejo", "bolo"
+        )
 
-        for ((hindi, english) in sortedMap) {
-            text = text.replace(hindi, english)
+        // Find if there's a message marker in the text
+        var commandPart = text
+        var messagePart = ""
+
+        for (marker in messageMarkers.sortedByDescending { it.length }) {
+            val idx = text.indexOf(marker)
+            if (idx != -1) {
+                // Split — translate command, keep message raw
+                commandPart = text.substring(0, idx + marker.length)
+                messagePart = text.substring(idx + marker.length).trim()
+                break
+            }
         }
 
-        // Clean up extra spaces
-        return text.replace(Regex("\\s+"), " ").trim()
+        // Only translate the command part
+        val sortedMap = hindiToEnglish.entries.sortedByDescending { it.key.length }
+        for ((hindi, english) in sortedMap) {
+            commandPart = commandPart.replace(
+                Regex("\\b${Regex.escape(hindi)}\\b"), english
+            )
+        }
+
+        // Rejoin — message body stays exactly as spoken
+        val result = if (messagePart.isNotEmpty()) {
+            "$commandPart $messagePart"
+        } else {
+            commandPart
+        }
+
+        return result.replace(Regex("\\s+"), " ").trim()
     }
 
     // Returns true if the text contains any Hindi characters or known Hindi words

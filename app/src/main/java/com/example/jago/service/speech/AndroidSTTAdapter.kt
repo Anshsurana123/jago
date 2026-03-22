@@ -34,9 +34,9 @@ class AndroidSTTAdapter(private val context: Context) : SpeechAdapter {
                     putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
                     putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
                     putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3) // get top 3 results for better Hindi matching
-                    putExtra(RecognizerIntent.EXTRA_LANGUAGE, "hi-IN") // Hindi India
-                    putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, "hi-IN")
-                    putExtra("android.speech.extra.EXTRA_ADDITIONAL_LANGUAGES", arrayOf("en-IN", "en-US"))
+                    putExtra(RecognizerIntent.EXTRA_LANGUAGE, "en-IN") // English India as primary
+                    putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, "en-IN")
+                    putExtra("android.speech.extra.EXTRA_ADDITIONAL_LANGUAGES", arrayOf("hi-IN", "en-US"))
                 }
                 
                 speechRecognizer?.startListening(intent)
