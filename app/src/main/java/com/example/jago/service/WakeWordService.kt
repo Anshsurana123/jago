@@ -22,6 +22,8 @@ import com.example.jago.logic.JagoTTS
 import com.example.jago.service.speech.AndroidSTTAdapter
 import com.example.jago.service.speech.SpeechAdapter
 import kotlinx.coroutines.*
+import ai.onnxruntime.OrtEnvironment
+import ai.onnxruntime.OrtSession
 import org.tensorflow.lite.Interpreter
 import org.tensorflow.lite.support.common.FileUtil
 
@@ -32,7 +34,7 @@ class WakeWordService : Service() {
     }
 
     // 3-model openWakeWord pipeline
-    private var melModel: Interpreter? = null
+    private var melSession: OrtSession? = null  // replace melModel
     private var embeddingModel: Interpreter? = null
     private var wakeWordModel: Interpreter? = null
 
@@ -88,27 +90,18 @@ class WakeWordService : Service() {
 
     private fun initWakeWord() {
         try {
-            // melspectrogram needs auto-allocation disabled
-            // otherwise it overflows before we can resize input
-            val melOptions = Interpreter.Options().apply {
-                setNumThreads(2)
-                setCancellable(false)
-            }
-
-            val melBuffer = FileUtil.loadMappedFile(this, "melspectrogram.tflite")
-            melModel = Interpreter(melBuffer, melOptions)
-            melModel?.resizeInput(0, intArrayOf(1, 1280), true) // true = strict resize
-            melModel?.allocateTensors()
-
-            Log.d("Jago", "Mel model input shape: ${melModel?.getInputTensor(0)?.shape()?.contentToString()}")
-            Log.d("Jago", "Mel model output shape: ${melModel?.getOutputTensor(0)?.shape()?.contentToString()}")
-
+            // Mel → ONNX (this is what openWakeWord actually uses)
+            val env = OrtEnvironment.getEnvironment()
+            val melBytes = assets.open("melspectrogram.onnx").readBytes()
+            melSession = env.createSession(melBytes, OrtSession.SessionOptions())
+    
+            // Embedding + wake word → TFLite
             embeddingModel = Interpreter(FileUtil.loadMappedFile(this, "embedding_model.tflite"))
             wakeWordModel = Interpreter(FileUtil.loadMappedFile(this, "jagoo.tflite"))
-
+    
             isDetecting = true
             startAudioCapture()
-            Log.d("Jago", "openWakeWord pipeline initialized")
+            Log.d("Jago", "openWakeWord pipeline initialized ✓")
         } catch (e: Exception) {
             Log.e("Jago", "Failed to init wake word models", e)
         }
@@ -160,25 +153,28 @@ class WakeWordService : Service() {
                 // STEP A — convert raw PCM to float [-1, 1]
                 val floatChunk = FloatArray(CHUNK_SIZE) { chunkBuffer[it] / 32768f }
 
-                // STEP B — melspectrogram model
-                // Input:  [1, 1280] floats
-                // Output: [1, 1, 32, 32] — 32 mel frames × 32 bins
-                val melInput = Array(1) { floatChunk }
-                val melOutput = Array(1) { Array(1) { Array(32) { FloatArray(32) } } }
-                try {
-                    melModel?.run(melInput, melOutput)
-                } catch (e: Exception) {
-                    Log.e("Jago", "Mel model error: ${e.message}")
-                    continue
-                }
+                // STEP B — melspectrogram via ONNX
+                val env = OrtEnvironment.getEnvironment()
+                val inputTensor = ai.onnxruntime.OnnxTensor.createTensor(
+                    env,
+                    java.nio.FloatBuffer.wrap(floatChunk),
+                    longArrayOf(1, 1280)
+                )
+                val melResults = melSession?.run(mapOf("input" to inputTensor))
+                val melArray = (melResults?.get(0)?.value as? Array<*>)
+                    ?.let { it[0] as? Array<*> }
+                    ?.let { it[0] as? Array<*> }
+                    ?.map { (it as FloatArray) }
+                
+                melResults?.close()
+                inputTensor.close()
+                
+                if (melArray == null) continue
 
-                // STEP C — normalize and push mel frames into rolling buffer
-                // openWakeWord normalization: (value / 10.0) + 2.0
-                for (frameIdx in 0 until 32) {
-                    val melFrame = FloatArray(32) { binIdx ->
-                        (melOutput[0][0][frameIdx][binIdx] / 10f) + 2f
-                    }
-                    melFrameBuffer.addLast(melFrame)
+                // STEP C — normalize and push frames
+                for (melFrame in melArray) {
+                    val normalized = FloatArray(melFrame.size) { i -> (melFrame[i] / 10f) + 2f }
+                    melFrameBuffer.addLast(normalized)
                 }
                 while (melFrameBuffer.size > MEL_FRAMES_NEEDED) {
                     melFrameBuffer.removeFirst()
@@ -491,7 +487,7 @@ class WakeWordService : Service() {
         audioRecord?.release()
         audioRecord = null
         audioThread?.interrupt()
-        melModel?.close()
+        melSession?.close()
         embeddingModel?.close()
         wakeWordModel?.close()
         speechAdapter?.destroy()
