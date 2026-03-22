@@ -88,17 +88,24 @@ class WakeWordService : Service() {
 
     private fun initWakeWord() {
         try {
-            // Mel model needs manual input resize before allocating
+            // melspectrogram needs auto-allocation disabled
+            // otherwise it overflows before we can resize input
             val melOptions = Interpreter.Options().apply {
                 setNumThreads(2)
+                setCancellable(false)
             }
-            melModel = Interpreter(FileUtil.loadMappedFile(this, "melspectrogram.tflite"), melOptions)
-            melModel?.resizeInput(0, intArrayOf(1, 1280))  // ← THIS is the fix
-            melModel?.allocateTensors()                     // ← manually allocate after resize
+
+            val melBuffer = FileUtil.loadMappedFile(this, "melspectrogram.tflite")
+            melModel = Interpreter(melBuffer, melOptions)
+            melModel?.resizeInput(0, intArrayOf(1, 1280), true) // true = strict resize
+            melModel?.allocateTensors()
+
+            Log.d("Jago", "Mel model input shape: ${melModel?.getInputTensor(0)?.shape()?.contentToString()}")
+            Log.d("Jago", "Mel model output shape: ${melModel?.getOutputTensor(0)?.shape()?.contentToString()}")
 
             embeddingModel = Interpreter(FileUtil.loadMappedFile(this, "embedding_model.tflite"))
             wakeWordModel = Interpreter(FileUtil.loadMappedFile(this, "jagoo.tflite"))
-            
+
             isDetecting = true
             startAudioCapture()
             Log.d("Jago", "openWakeWord pipeline initialized")
