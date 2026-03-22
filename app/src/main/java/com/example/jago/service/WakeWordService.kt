@@ -90,69 +90,80 @@ class WakeWordService : Service() {
     }
 
     private fun startAudioCapture() {
+        val sampleRate = 16000
+        val chunkSize = 1280  // 80ms per chunk
+        val windowSize = audioBuffer.size  // full model input size
+        
+        // How many chunks to wait between inferences (~every 400ms)
+        val inferenceEveryNChunks = 5
+        var chunkCount = 0
+
+        // Cooldown after detection to prevent double triggers
+        var cooldownFrames = 0
+        val cooldownAfterDetection = 20 // ~1.6 seconds
+
         val minBufferSize = AudioRecord.getMinBufferSize(
-            16000, 
-            AudioFormat.CHANNEL_IN_MONO, 
+            sampleRate,
+            AudioFormat.CHANNEL_IN_MONO,
             AudioFormat.ENCODING_PCM_16BIT
         )
         
         try {
             val recorder = AudioRecord(
                 MediaRecorder.AudioSource.MIC,
-                16000,
+                sampleRate,
                 AudioFormat.CHANNEL_IN_MONO,
                 AudioFormat.ENCODING_PCM_16BIT,
-                maxOf(audioBuffer.size * 2, minBufferSize)
+                maxOf(chunkSize * 2, minBufferSize)
             )
-            
+
             if (recorder.state != AudioRecord.STATE_INITIALIZED) {
-                Log.e("Jago", "AudioRecord initialization failed")
+                Log.e("Jago", "AudioRecord init failed")
                 return
             }
-    
+
             recorder.startRecording()
-            
+
             Thread {
-                val chunkSize = minOf(1280, audioBuffer.size)
                 val chunkBuffer = ShortArray(chunkSize)
-                
-                val scoreHistory = FloatArray(3)
-                var scoreIndex = 0
-                
+
                 while (isServiceRunning) {
-                    val read = recorder.read(chunkBuffer, 0, chunkBuffer.size)
-                    if (read > 0 && isDetecting) {
-                        // Slide window left
-                        System.arraycopy(audioBuffer, read, audioBuffer, 0, audioBuffer.size - read)
-                        // Append new chunk
-                        System.arraycopy(chunkBuffer, 0, audioBuffer, audioBuffer.size - read, read)
-                        
-                        val scores = runInference(audioBuffer)
-                        if (scores.isNotEmpty()) {
-                            val targetIndex = if (scores.size > 1) 1 else 0 
-                            val score = scores[targetIndex]
-                            
-                            // 3-frame moving average to eliminate sudden noise spikes
-                            scoreHistory[scoreIndex % 3] = score
-                            scoreIndex++
-                            
-                            val avgScore = (scoreHistory[0] + scoreHistory[1] + scoreHistory[2]) / 3f
-                            
-                            if (avgScore > 0.2f) {
-                                Log.d("Jago", "Scores: ${scores.contentToString()} | Avg: $avgScore")
-                            }
-                            
-                            // Trigger if the average over 240ms is solid
-                            if (avgScore > 0.55f && scoreIndex >= 3) { 
-                                Log.d("Jago", "Wake word detected! Avg: $avgScore")
-                                isDetecting = false
-                                Handler(Looper.getMainLooper()).post { showOverlay() }
-                                audioBuffer.fill(0) // Reset buffer to prevent double triggers
-                                scoreHistory.fill(0f)
-                            }
-                        }
+                    val read = recorder.read(chunkBuffer, 0, chunkSize)
+                    if (read <= 0 || !isDetecting) continue
+
+                    // Slide window
+                    System.arraycopy(audioBuffer, read, audioBuffer, 0, windowSize - read)
+                    System.arraycopy(chunkBuffer, 0, audioBuffer, windowSize - read, read)
+
+                    chunkCount++
+
+                    // Cooldown — skip inference right after a detection
+                    if (cooldownFrames > 0) {
+                        cooldownFrames--
+                        continue
+                    }
+
+                    // Only run inference every 5 chunks (~400ms)
+                    if (chunkCount % inferenceEveryNChunks != 0) continue
+
+                    val scores = runInference(audioBuffer)
+                    if (scores.isEmpty()) continue
+
+                    val score = if (scores.size > 1) scores[1] else scores[0]
+
+                    if (score > 0.2f) {
+                        Log.d("Jago", "Score: $score")
+                    }
+
+                    if (score > 0.85f) {
+                        Log.d("Jago", "Wake word DETECTED! Score: $score")
+                        isDetecting = false
+                        cooldownFrames = cooldownAfterDetection
+                        audioBuffer.fill(0)
+                        Handler(Looper.getMainLooper()).post { showOverlay() }
                     }
                 }
+
                 recorder.stop()
                 recorder.release()
             }.start()
@@ -429,7 +440,11 @@ class WakeWordService : Service() {
     }
 
     private fun resumeWakeWord() {
-        isDetecting = true
+        serviceScope.launch {
+            delay(1500) // wait 1.5s before listening again
+            audioBuffer.fill(0)
+            isDetecting = true
+        }
     }
 
     override fun onDestroy() {
