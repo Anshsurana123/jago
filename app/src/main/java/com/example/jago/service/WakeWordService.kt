@@ -39,7 +39,7 @@ class WakeWordService : Service() {
     private var wakeWordModel: Interpreter? = null
 
     // Pipeline state
-    private var isDetecting = false
+    @Volatile private var isDetecting = false
     private var audioRecord: AudioRecord? = null
     private var audioThread: Thread? = null
 
@@ -462,11 +462,16 @@ class WakeWordService : Service() {
 
     private fun callCerebrasAsync(text: String) {
         serviceScope.launch {
+            // Give user audio feedback that we're thinking (important for blind users)
+            JagoTTS.speak("Let me think...")
+            
             val response = com.example.jago.logic.CerebrasClient.askAI(text, useSmartModel = false)
             if (!response.isNullOrEmpty()) {
                 actionExecutor?.execute(Command(CommandType.AI_RESPONSE, aiResponse = response))
             } else {
-                actionExecutor?.execute(Command(CommandType.UNKNOWN, aiResponse = "I’m having trouble connecting."))
+                // Cerebras timed out or failed — tell the user clearly
+                JagoTTS.speak("Sorry, I couldn't connect right now. Please try again.")
+                hideOverlayWithDelay()
             }
         }
     }
@@ -488,10 +493,20 @@ class WakeWordService : Service() {
             delay(1500)
             melFrameBuffer.clear()
             embeddingBuffer.clear()
-            // Restart audio capture since we stopped it for STT
-            audioRecord?.startRecording()
-            isDetecting = true
-            Log.d("Jago", "Wake word detection resumed")
+            try {
+                if (audioRecord?.state == AudioRecord.STATE_INITIALIZED) {
+                    audioRecord?.startRecording()
+                    isDetecting = true
+                    Log.d("Jago", "Wake word detection resumed")
+                } else {
+                    // AudioRecord is in bad state, restart the whole capture
+                    Log.w("Jago", "AudioRecord in bad state, restarting capture")
+                    startAudioCapture()
+                    isDetecting = true
+                }
+            } catch (e: Exception) {
+                Log.e("Jago", "Failed to resume wake word", e)
+            }
         }
     }
 

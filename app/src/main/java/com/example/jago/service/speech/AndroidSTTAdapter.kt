@@ -10,6 +10,8 @@ import android.util.Log
 
 class AndroidSTTAdapter(private val context: Context) : SpeechAdapter {
 
+    private var retryCount = 0
+    private val maxRetries = 2
     private var speechRecognizer: SpeechRecognizer? = null
     private var callback: SpeechAdapter.Callback? = null
     private var isListening = false
@@ -106,12 +108,27 @@ class AndroidSTTAdapter(private val context: Context) : SpeechAdapter {
             val errorMessage = getErrorText(error)
             Log.e("AndroidSTT", "onError: $errorMessage ($error)")
             isListening = false
+
+            if (error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY && retryCount < maxRetries) {
+                // Recognizer was busy — destroy and retry after short delay
+                retryCount++
+                Log.d("AndroidSTT", "Recognizer busy, retrying ($retryCount/$maxRetries)...")
+                destroy()
+                android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                    callback?.let { startListening(it) }
+                }, 600)
+                return
+            }
+
+            // For all other errors (or if retries exhausted), reset and notify
+            retryCount = 0
             // Important: Notify callback so service can resume wake word
             callback?.onError("Speech Error: $errorMessage")
             destroy() // Safely clean up
         }
 
         override fun onResults(results: Bundle?) {
+            retryCount = 0  // reset retries on success
             Log.d("AndroidSTT", "onResults")
             val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
             if (!matches.isNullOrEmpty()) {

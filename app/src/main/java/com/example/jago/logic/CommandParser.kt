@@ -69,8 +69,8 @@ class CommandParser {
         "MEDIA_NEXT" to listOf("next", "skip", "track"),
         "MEDIA_PREV" to listOf("previous", "back track", "back song"),
         "SCREENSHOT" to listOf("screenshot", "capture screen", "take screenshot"),
-        "DND" to listOf("dnd", "do not disturb"),
-        "SILENT" to listOf("silent mode", "mute phone"),
+        "DND" to listOf("dnd", "do not disturb", "don't disturb", "dont disturb"),
+        "SILENT" to listOf("silent mode", "mute phone", "can't hear", "cant hear"),
         "FOCUS" to listOf("focus mode"),
         "PHOTO_ACTION" to listOf("click", "take", "capture", "photo", "picture"),
         "REMINDER" to listOf("remind", "reminder", "notify me", "tell me"),
@@ -422,20 +422,32 @@ class CommandParser {
                 }
 
                 if (!splitFound) {
-                    // Fallback: Implicit separation
-                    // "tell mom i am late" -> First word is contact? No, names can be multi-word.
-                    // "text rahul hello"
-                    
-                    // HEURISTIC: Assume contact is the first word(s) before the message.
-                    // Ideally we'd have Named Entity Recognition, but for now:
-                    // If "tell [Name] [Body]", we assume the Name is 1-2 words? 
-                    // Or we just look for common structure.
-                    
-                    // Simple approach: Take first word as contact if body exists
-                    val parts = content.split(" ", limit = 2)
-                    if (parts.size >= 1) {
-                        contactName = parts[0].replace(":", "").trim()
-                        messageBody = if (parts.size > 1) parts[1].trim() else ""
+                    val words = content.split(" ")
+                    if (words.size >= 3) {
+                        // Try two-word contact name first (e.g. "Ram Prasad hello")
+                        val twoWordContact = "${words[0]} ${words[1]}"
+                        val remainingAfterTwo = words.drop(2).joinToString(" ")
+                        
+                        // Heuristic: if third word onwards looks like a message (common message starters)
+                        // OR if two-word contact is more than 6 chars total (likely a real name)
+                        val messageStarters = listOf("main", "mai", "mein", "i ", "aaj", "kal", "bhai",
+                            "yaar", "hello", "hi", "hey", "please", "pls", "kya", "ab", "abhi")
+                        val looksLikeMessage = messageStarters.any { remainingAfterTwo.startsWith(it) }
+                        
+                        if (looksLikeMessage || twoWordContact.length > 6) {
+                            contactName = twoWordContact.replace(":", "").trim()
+                            messageBody = remainingAfterTwo.trim()
+                        } else {
+                            // Fall back to single word contact
+                            contactName = words[0].replace(":", "").trim()
+                            messageBody = words.drop(1).joinToString(" ").trim()
+                        }
+                    } else if (words.size == 2) {
+                        contactName = words[0].replace(":", "").trim()
+                        messageBody = words[1].trim()
+                    } else if (words.size == 1) {
+                        contactName = words[0].replace(":", "").trim()
+                        messageBody = ""
                     }
                 }
                 
@@ -983,7 +995,7 @@ class CommandParser {
 
         // Remove punctuation (but keep math symbols and brackets)
         // Adjust regex to keep standard chars but allow typical math words
-        return clean.replace(Regex("[^a-z0-9 .+\\-*/%^():]"), "") 
+        return clean.replace(Regex("[^a-z0-9 '.+\\-*/%^():]"), "") 
                     .replace(Regex("\\s+"), " ")
                     .trim()
     }

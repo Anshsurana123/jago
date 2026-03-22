@@ -155,9 +155,7 @@ object HindiTranslator {
         "meri" to "",
         "thoda" to "",
         "yaar" to "",
-        "bhai" to "",
-        "na" to "",
-        "ko" to ""
+        "bhai" to ""
     )
 
     fun translate(input: String): String {
@@ -167,8 +165,15 @@ object HindiTranslator {
 
         // Message body markers — everything AFTER these stays untouched
         val messageMarkers = listOf(
-            "message karo", "msg karo", "message bhejo", 
-            "whatsapp karo", "whatsapp bhejo", "bolo"
+            // Full command phrases (highest priority, check first)
+            "whatsapp message bhejo",
+            "whatsapp bhejo",
+            "whatsapp karo",
+            "message bhejo",
+            "message karo",
+            "msg bhejo",
+            "msg karo",
+            "bolo"
         )
 
         // Find if there's a message marker in the text
@@ -185,6 +190,21 @@ object HindiTranslator {
             }
         }
 
+        // If no marker found but text starts with "message/msg [name]",
+        // protect everything after the second word as message body
+        if (messagePart.isEmpty()) {
+            val msgNounRegex = Regex("^(message|msg|whatsapp)\\s+(\\S+)\\s+(.+)$")
+            val msgMatch = msgNounRegex.find(commandPart)
+            if (msgMatch != null) {
+                val action = msgMatch.groupValues[1]      // "message"
+                val contact = msgMatch.groupValues[2]     // "ansh"
+                val body = msgMatch.groupValues[3]        // "kal milte hain" — protect this
+                commandPart = "$action $contact"
+                messagePart = body
+                android.util.Log.d("HindiTranslator", "Noun-style message detected: contact=$contact, body=$body")
+            }
+        }
+
         // Only translate the command part
         val sortedMap = hindiToEnglish.entries.sortedByDescending { it.key.length }
         for ((hindi, english) in sortedMap) {
@@ -192,6 +212,9 @@ object HindiTranslator {
                 Regex("\\b${Regex.escape(hindi)}\\b"), english
             )
         }
+
+        // Remove "ko" only from command part (indirect object marker, meaningless to parser)
+        commandPart = commandPart.replace(Regex("\\bko\\b"), "").replace(Regex("\\s+"), " ").trim()
 
         // Rejoin — message body stays exactly as spoken
         val result = if (messagePart.isNotEmpty()) {
