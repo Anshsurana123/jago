@@ -430,6 +430,15 @@ class WakeWordService : Service() {
                     }
                     hideOverlayWithDelay()
                 }
+                CommandType.READ_SCREEN -> {
+                    isMidFlow = true
+                    hideOverlayWithDelay()
+                    serviceScope.launch {
+                        kotlinx.coroutines.delay(600) // Wait for overlay to completely close so it doesn't block the screen
+                        actionExecutor?.execute(command)
+                        isMidFlow = false
+                    }
+                }
                 else -> {
                     validCommands.forEach { cmd ->
                          actionExecutor?.execute(cmd)

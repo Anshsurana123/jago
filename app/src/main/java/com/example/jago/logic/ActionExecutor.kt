@@ -372,9 +372,8 @@ class ActionExecutor(private val context: Context) {
                 JagoTTS.speakBilingual("Reading notifications.", "Notifications sun rahe hain.")
             }
             CommandType.READ_SCREEN -> {
-                val screenText = com.example.jago.service.JagoAccessibilityService
-                    .readScreen()
-                speak(screenText)
+                val screenText = com.example.jago.service.JagoAccessibilityService.readScreen()
+                JagoTTS.speakBilingual(screenText, screenText)
             }
             CommandType.SET_LANGUAGE -> {
                 // Handled in WakeWordService — this is a safety fallback
