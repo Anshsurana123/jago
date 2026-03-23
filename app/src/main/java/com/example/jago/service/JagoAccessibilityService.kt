@@ -216,7 +216,15 @@ class JagoAccessibilityService : AccessibilityService() {
                 ?: return "Cannot read screen right now"
         
             val texts = mutableListOf<String>()
-            collectVisibleText(root, texts)
+            
+            val displayMetrics = instance?.resources?.displayMetrics
+            val screenRect = if (displayMetrics != null) {
+                android.graphics.Rect(0, 0, displayMetrics.widthPixels, displayMetrics.heightPixels)
+            } else {
+                android.graphics.Rect(0, 0, Int.MAX_VALUE, Int.MAX_VALUE) // Fallback if unavailable
+            }
+
+            collectVisibleText(root, texts, screenRect)
         
             if (texts.isEmpty()) return "Nothing to read on screen"
         
@@ -228,12 +236,16 @@ class JagoAccessibilityService : AccessibilityService() {
         
         private fun collectVisibleText(
             node: AccessibilityNodeInfo?,
-            texts: MutableList<String>
+            texts: MutableList<String>,
+            screenRect: android.graphics.Rect
         ) {
             if (node == null) return
         
-            // Only collect visible nodes with meaningful text
-            if (node.isVisibleToUser) {
+            val nodeBounds = android.graphics.Rect()
+            node.getBoundsInScreen(nodeBounds)
+
+            // Only collect visible nodes that are actually drawn on the specific physical screen area
+            if (node.isVisibleToUser && android.graphics.Rect.intersects(nodeBounds, screenRect) && !nodeBounds.isEmpty) {
                 val text = node.text?.toString()?.trim()
                 val desc = node.contentDescription?.toString()?.trim()
         
@@ -248,7 +260,7 @@ class JagoAccessibilityService : AccessibilityService() {
         
             // Recurse into children
             for (i in 0 until node.childCount) {
-                collectVisibleText(node.getChild(i), texts)
+                collectVisibleText(node.getChild(i), texts, screenRect)
             }
         }
 
@@ -580,7 +592,12 @@ class JagoAccessibilityService : AccessibilityService() {
                     "com.android.systemui",
                     "android",
                     "com.android.launcher",
-                    "com.google.android.inputmethod"
+                    "com.google.android.inputmethod",
+                    "com.preff.kb",        // Xiaomi Keyboard
+                    "com.sec.android.inputmethod", // Samsung Keyboard
+                    "com.touchtype.swiftkey", // SwiftKey
+                    "com.miui.home",       // Xiaomi Launcher
+                    "com.sec.android.app.launcher" // Samsung Launcher
                 )
                 if (packageName != null && systemPackages.none { packageName.startsWith(it) }) {
                     Log.d("JagoAccessibility", "App changed to $packageName -> Stopping speech")
