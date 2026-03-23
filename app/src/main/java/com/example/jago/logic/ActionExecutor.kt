@@ -343,6 +343,16 @@ class ActionExecutor(private val context: Context) {
             CommandType.SEND_RECENT_PHOTO -> {
                 shareRecentPhoto(command.contactName, command.searchPlatform)
             }
+            CommandType.READ_NOTIFICATIONS -> {
+                val notifications = com.example.jago.service.JagoAccessibilityService
+                    .readNotifications()
+                speak(notifications)
+            }
+            CommandType.READ_SCREEN -> {
+                val screenText = com.example.jago.service.JagoAccessibilityService
+                    .readScreen()
+                speak(screenText)
+            }
             CommandType.UNKNOWN -> {
                 speak(command.aiResponse ?: "I didn't understand that command.")
             }

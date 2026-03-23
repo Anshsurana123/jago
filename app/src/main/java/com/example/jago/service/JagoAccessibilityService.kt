@@ -17,6 +17,10 @@ class JagoAccessibilityService : AccessibilityService() {
         private var isAutoSending: Boolean = false
         private var automationActive: Boolean = false
         
+        // Notification storage — stores recent notifications for reading
+        private val recentNotifications = mutableListOf<String>()
+        private const val MAX_NOTIFICATIONS = 20
+        
         // Polling variables
         private var chooserRetryCount = 0
         private const val MAX_CHOOSER_RETRIES = 10
@@ -177,6 +181,62 @@ class JagoAccessibilityService : AccessibilityService() {
         }
 
         fun isServiceRunning(): Boolean = instance != null
+
+        fun readNotifications(): String {
+            synchronized(recentNotifications) {
+                if (recentNotifications.isEmpty()) {
+                    return "No new notifications"
+                }
+                // Return most recent 5 notifications, newest first
+                val toRead = recentNotifications.takeLast(5).reversed()
+                val result = toRead.joinToString(". ")
+                // Clear after reading so next call doesn't repeat
+                recentNotifications.clear()
+                Log.d("JagoAccessibility", "Reading ${toRead.size} notifications")
+                return result
+            }
+        }
+
+        fun readScreen(): String {
+            val root = instance?.rootInActiveWindow
+                ?: return "Cannot read screen right now"
+        
+            val texts = mutableListOf<String>()
+            collectVisibleText(root, texts)
+        
+            if (texts.isEmpty()) return "Nothing to read on screen"
+        
+            // Join with pause between items for natural TTS flow
+            val result = texts.distinct().joinToString(". ")
+            Log.d("JagoAccessibility", "Screen text collected: ${texts.size} items")
+            return result
+        }
+        
+        private fun collectVisibleText(
+            node: AccessibilityNodeInfo?,
+            texts: MutableList<String>
+        ) {
+            if (node == null) return
+        
+            // Only collect visible nodes with meaningful text
+            if (node.isVisibleToUser) {
+                val text = node.text?.toString()?.trim()
+                val desc = node.contentDescription?.toString()?.trim()
+        
+                // Add text if it exists and isn't just whitespace or a single char
+                if (!text.isNullOrEmpty() && text.length > 1) {
+                    texts.add(text)
+                } else if (!desc.isNullOrEmpty() && desc.length > 1 && text.isNullOrEmpty()) {
+                    // Use content description as fallback (important for icons/buttons)
+                    texts.add(desc)
+                }
+            }
+        
+            // Recurse into children
+            for (i in 0 until node.childCount) {
+                collectVisibleText(node.getChild(i), texts)
+            }
+        }
 
         private var isSearchingForContact = false
 
@@ -445,6 +505,31 @@ class JagoAccessibilityService : AccessibilityService() {
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
 
+        // Capture incoming notifications for "read notifications" feature
+        if (event?.eventType == AccessibilityEvent.TYPE_NOTIFICATION_STATE_CHANGED) {
+            val pkg = event.packageName?.toString() ?: "unknown"
+            val text = event.text?.joinToString(" ")?.trim()
+            if (!text.isNullOrEmpty() && pkg != "com.example.jago") {
+                val appName = try {
+                    instance?.packageManager
+                        ?.getApplicationLabel(
+                            instance!!.packageManager.getApplicationInfo(pkg, 0)
+                        )?.toString() ?: pkg
+                } catch (e: Exception) { pkg }
+        
+                val notification = "$appName: $text"
+                synchronized(recentNotifications) {
+                    // Avoid duplicate consecutive notifications
+                    if (recentNotifications.lastOrNull() != notification) {
+                        recentNotifications.add(notification)
+                        if (recentNotifications.size > MAX_NOTIFICATIONS) {
+                            recentNotifications.removeAt(0)
+                        }
+                    }
+                }
+                Log.d("JagoAccessibility", "Notification captured: $notification")
+            }
+        }
 
         // Global Window State Monitoring for TTS Interruption
         if (event?.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {

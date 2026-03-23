@@ -48,6 +48,8 @@ enum class CommandType {
     SCREENSHOT_AND_WHATSAPP,
     SCHEDULED_ACTION,
     OPEN_SCHEDULE,
+    READ_NOTIFICATIONS,
+    READ_SCREEN,
     UNKNOWN
 }
 
@@ -78,7 +80,20 @@ class CommandParser {
         "SEARCH" to listOf("search", "look up", "find"),
         "ALARM" to listOf("alarm", "wake"),
         "RECENT_PHOTO" to listOf("recent pic", "recent photo", "latest pic", "latest photo", "recent image", "latest image"),
-        "SCHEDULE_VIEW" to listOf("scheduled tasks", "future tasks", "open schedule", "show schedule", "my schedule", "pending tasks")
+        "SCHEDULE_VIEW" to listOf("scheduled tasks", "future tasks", "open schedule", "show schedule", "my schedule", "pending tasks"),
+        "READ_NOTIFICATIONS" to listOf(
+            "notification", "notifications", "notify",
+            "padhao notification", "notification padhao",
+            "kya aaya", "messages padhao", "alerts padhao",
+            "read notifications", "check notifications",
+            "inbox", "kya notification"
+        ),
+        "READ_SCREEN" to listOf(
+            "screen padhao", "read screen", "kya likha hai",
+            "screen kya hai", "padhao screen", "what's on screen",
+            "what is on screen", "describe screen",
+            "screen batao", "kya dikh raha hai", "screen read karo"
+        )
     )
     
     // ... existing actionModifiers ...
@@ -247,7 +262,7 @@ class CommandParser {
         }
 
         // 1. Detect HIGH-SPECIFICITY intents first (to avoid collisions like 'screen')
-        val priority1Keys = listOf("RECENT_PHOTO", "REMINDER", "SCREENSHOT", "MEDIA_PLAY", "MEDIA_PAUSE", "MEDIA_NEXT", "MEDIA_PREV", "FLASHLIGHT", "OPEN_APP", "CLOSE_APP", "CALL", "MESSAGE", "DND", "SILENT", "FOCUS", "PHOTO_ACTION", "SEARCH", "SCHEDULE_VIEW")
+        val priority1Keys = listOf("READ_NOTIFICATIONS", "READ_SCREEN", "RECENT_PHOTO", "REMINDER", "SCREENSHOT", "MEDIA_PLAY", "MEDIA_PAUSE", "MEDIA_NEXT", "MEDIA_PREV", "FLASHLIGHT", "OPEN_APP", "CLOSE_APP", "CALL", "MESSAGE", "DND", "SILENT", "FOCUS", "PHOTO_ACTION", "SEARCH", "SCHEDULE_VIEW")
         var matchedIntentKey: String? = null
         var matchedSeed: String? = null
 
@@ -565,6 +580,8 @@ class CommandParser {
 
                 Command(CommandType.SEND_RECENT_PHOTO, contactName = contact, searchPlatform = appName, usesContextReference = true)
             }
+            "READ_NOTIFICATIONS" -> Command(CommandType.READ_NOTIFICATIONS)
+            "READ_SCREEN" -> Command(CommandType.READ_SCREEN)
             else -> {
                 // Try parsing as Math
                 val mathCommand = parseMath(cleanText)
