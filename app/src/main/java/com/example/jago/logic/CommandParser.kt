@@ -50,6 +50,7 @@ enum class CommandType {
     OPEN_SCHEDULE,
     READ_NOTIFICATIONS,
     READ_SCREEN,
+    SET_LANGUAGE,
     UNKNOWN
 }
 
@@ -93,6 +94,18 @@ class CommandParser {
             "screen kya hai", "padhao screen", "what's on screen",
             "what is on screen", "describe screen",
             "screen batao", "kya dikh raha hai", "screen read karo"
+        ),
+        "SET_LANGUAGE" to listOf(
+            // English triggers
+            "speak in english", "english mai bolo", "english mein bolo",
+            "angreji mai bolo", "angreji mein bolo", "angreji me bolo",
+            "speak english", "switch to english", "english language",
+            "talk in english", "respond in english",
+            // Hindi triggers
+            "speak in hindi", "hindi mai bolo", "hindi mein bolo",
+            "hindi me bolo", "hindi mein bol", "hindi mai bol",
+            "switch to hindi", "hindi language", "talk in hindi",
+            "respond in hindi", "bolo hindi mein"
         )
     )
     
@@ -262,7 +275,7 @@ class CommandParser {
         }
 
         // 1. Detect HIGH-SPECIFICITY intents first (to avoid collisions like 'screen')
-        val priority1Keys = listOf("READ_NOTIFICATIONS", "READ_SCREEN", "RECENT_PHOTO", "REMINDER", "SCREENSHOT", "MEDIA_PLAY", "MEDIA_PAUSE", "MEDIA_NEXT", "MEDIA_PREV", "FLASHLIGHT", "OPEN_APP", "CLOSE_APP", "CALL", "MESSAGE", "DND", "SILENT", "FOCUS", "PHOTO_ACTION", "SEARCH", "SCHEDULE_VIEW")
+        val priority1Keys = listOf("SET_LANGUAGE", "READ_NOTIFICATIONS", "READ_SCREEN", "RECENT_PHOTO", "REMINDER", "SCREENSHOT", "MEDIA_PLAY", "MEDIA_PAUSE", "MEDIA_NEXT", "MEDIA_PREV", "FLASHLIGHT", "OPEN_APP", "CLOSE_APP", "CALL", "MESSAGE", "DND", "SILENT", "FOCUS", "PHOTO_ACTION", "SEARCH", "SCHEDULE_VIEW")
         var matchedIntentKey: String? = null
         var matchedSeed: String? = null
 
@@ -582,6 +595,16 @@ class CommandParser {
             }
             "READ_NOTIFICATIONS" -> Command(CommandType.READ_NOTIFICATIONS)
             "READ_SCREEN" -> Command(CommandType.READ_SCREEN)
+            "SET_LANGUAGE" -> {
+                // Detect which language from the text
+                val isHindi = listOf(
+                    "hindi", "hindi mai", "hindi mein", "hindi me"
+                ).any { cleanText.contains(it) }
+                Command(
+                    type = CommandType.SET_LANGUAGE,
+                    messageBody = if (isHindi) "hi" else "en"
+                )
+            }
             else -> {
                 // Try parsing as Math
                 val mathCommand = parseMath(cleanText)

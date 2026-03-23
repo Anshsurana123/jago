@@ -69,6 +69,11 @@ class WakeWordService : Service() {
     private var pendingFormattedTime: String? = null
     private var isWaitingForAlarmTime = false
 
+    // Notification reading follow-up state
+    private var pendingNotifications = listOf<com.example.jago.service.JagoAccessibilityService.Companion.NotificationItem>()
+    private var currentNotificationIndex = 0
+    private var isWaitingForNotificationResponse = false
+
     override fun onCreate() {
         super.onCreate()
         isServiceRunning = true
@@ -307,6 +312,11 @@ class WakeWordService : Service() {
             handleAlarmTimeFollowUp(translatedText)
             return
         }
+        // Handle notification follow-up response
+        if (isWaitingForNotificationResponse) {
+            handleNotificationFollowUp(translatedText)
+            return
+        }
 
         // Hinglish variations + what en-IN STT actually transcribes
         val hindiTriggers = listOf(
@@ -389,6 +399,31 @@ class WakeWordService : Service() {
                 CommandType.SET_REMINDER -> handleNewReminderCommand(command)
                 CommandType.SET_ALARM_CUSTOM, CommandType.SET_ALARM -> handleNewAlarmCommand(command)
                 CommandType.SCHEDULED_ACTION -> handleScheduledCommand(command)
+                CommandType.READ_NOTIFICATIONS -> {
+                    val notifications = com.example.jago.service.JagoAccessibilityService
+                        .readNotifications()
+                    if (notifications.isEmpty()) {
+                        JagoTTS.speakBilingual(
+                            "No new notifications.",
+                            "Koi nayi notification nahi hai."
+                        )
+                        hideOverlayWithDelay()
+                    } else {
+                        pendingNotifications = notifications
+                        currentNotificationIndex = 0
+                        readSingleNotification(notifications[0])
+                    }
+                }
+                CommandType.SET_LANGUAGE -> {
+                    val lang = command.messageBody ?: "en"
+                    JagoTTS.setLanguage(lang)
+                    if (lang == "hi") {
+                        JagoTTS.speak("Theek hai, ab main Hindi mein bolunga.")
+                    } else {
+                        JagoTTS.speak("Okay, I'll speak in English from now on.")
+                    }
+                    hideOverlayWithDelay()
+                }
                 else -> {
                     validCommands.forEach { cmd ->
                          actionExecutor?.execute(cmd)
@@ -528,6 +563,109 @@ class WakeWordService : Service() {
         } else {
              JagoTTS.speak("I couldn't schedule that command.")
              hideOverlayWithDelay()
+        }
+    }
+
+    private fun handleNotificationFollowUp(text: String) {
+        val lower = text.lowercase()
+
+        val wantsNext = listOf(
+            "agla", "next", "agla padhao", "aage", "aur",
+            "next one", "aur padhao", "continue"
+        ).any { lower.contains(it) }
+
+        val wantsReply = listOf(
+            "jawab", "reply", "jawab dena", "jawab do",
+            "respond", "answer", "message karo"
+        ).any { lower.contains(it) }
+
+        val wantsStop = listOf(
+            "band", "stop", "bas", "rukh", "enough",
+            "theek hai", "ok", "okay"
+        ).any { lower.contains(it) }
+
+        when {
+            wantsStop -> {
+                isWaitingForNotificationResponse = false
+                pendingNotifications = emptyList()
+                currentNotificationIndex = 0
+                JagoTTS.speakBilingual("Okay, stopping.", "Theek hai.")
+                hideOverlayWithDelay()
+            }
+            wantsReply -> {
+                isWaitingForNotificationResponse = false
+                val current = pendingNotifications.getOrNull(currentNotificationIndex)
+                if (current != null) {
+                    JagoTTS.speakBilingual(
+                        "Opening reply to ${current.sender ?: current.appName}",
+                        "${current.sender ?: current.appName} ko jawab de raha hoon"
+                    )
+                    if (current.sender != null) {
+                        actionExecutor?.execute(
+                            com.example.jago.logic.Command(
+                                com.example.jago.logic.CommandType.OPEN_WHATSAPP
+                            )
+                        )
+                    }
+                }
+                hideOverlayWithDelay()
+            }
+            wantsNext -> {
+                currentNotificationIndex++
+                if (currentNotificationIndex < pendingNotifications.size) {
+                    readSingleNotification(pendingNotifications[currentNotificationIndex])
+                } else {
+                    isWaitingForNotificationResponse = false
+                    pendingNotifications = emptyList()
+                    currentNotificationIndex = 0
+                    JagoTTS.speakBilingual(
+                        "No more notifications.",
+                        "Aur koi notification nahi hai."
+                    )
+                    hideOverlayWithDelay()
+                }
+            }
+            else -> {
+                JagoTTS.speakBilingualWithCallback(
+                    "Say 'next' for next, 'reply' to reply, or 'stop' to stop.",
+                    "Agla sunne ke liye 'agla' bolo, jawab dene ke liye 'jawab', band karne ke liye 'band'."
+                ) {
+                    startListening()
+                }
+            }
+        }
+    }
+
+    private fun readSingleNotification(
+        item: com.example.jago.service.JagoAccessibilityService.Companion.NotificationItem
+    ) {
+        val remaining = pendingNotifications.size - currentNotificationIndex - 1
+
+        val summary = if (item.sender != null) {
+            if (JagoTTS.currentLanguage == "hi")
+                "${item.appName} par ${item.sender} ka message"
+            else
+                "${item.appName} message from ${item.sender}"
+        } else {
+            item.appName
+        }
+
+        JagoTTS.speakWithCallback("$summary. ${item.content}") {
+            val followUp = if (remaining > 0) {
+                if (JagoTTS.currentLanguage == "hi")
+                    "$remaining aur hain. Agla padho ki jawab dena hai? Band karne ke liye 'band' bolo."
+                else
+                    "$remaining more. Say 'next' for next, 'reply' to reply, or 'stop' to stop."
+            } else {
+                if (JagoTTS.currentLanguage == "hi")
+                    "Yahi tha. Jawab dena hai?"
+                else
+                    "That's all. Say 'reply' to reply or 'stop' to stop."
+            }
+            JagoTTS.speakWithCallback(followUp) {
+                isWaitingForNotificationResponse = true
+                startListening()
+            }
         }
     }
 

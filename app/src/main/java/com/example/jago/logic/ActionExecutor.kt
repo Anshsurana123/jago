@@ -43,7 +43,10 @@ class ActionExecutor(private val context: Context) {
                     val resolver = ContactResolver(context)
                     when (val result = resolver.resolveContact(it)) {
                         is ContactResolver.ResolutionResult.Success -> {
-                            speak("Calling ${result.contact.name}")
+                            JagoTTS.speakBilingual(
+                                "Calling ${result.contact.name}",
+                                "${result.contact.name} ko call kar raha hoon"
+                            )
                             makeCall(result.contact.phoneNumber)
                         }
                         is ContactResolver.ResolutionResult.Ambiguous -> {
@@ -57,7 +60,7 @@ class ActionExecutor(private val context: Context) {
                 }
             }
             CommandType.OPEN_WHATSAPP -> {
-                speak("Opening WhatsApp")
+                JagoTTS.speakBilingual("Opening WhatsApp", "WhatsApp khol raha hoon")
                 openWhatsApp()
             }
             CommandType.SEND_WHATSAPP_MESSAGE -> {
@@ -77,7 +80,10 @@ class ActionExecutor(private val context: Context) {
                              // TODO: Implement follow-up state for message capture
                              return
                         }
-                        speak("Sending message to ${result.contact.name}")
+                        JagoTTS.speakBilingual(
+                            "Sending message to ${result.contact.name}",
+                            "${result.contact.name} ko message bhej raha hoon"
+                        )
                         sendDirectWhatsAppMessage(result.contact.phoneNumber, message)
                     }
                     is ContactResolver.ResolutionResult.Ambiguous -> {
@@ -244,7 +250,7 @@ class ActionExecutor(private val context: Context) {
                 }
             }
             CommandType.CLOSE_APP -> {
-                speak("Closing the app")
+                JagoTTS.speakBilingual("Closing the app", "App band kar raha hoon")
                 // Simple implementation: go home
                 val intent = Intent(Intent.ACTION_MAIN)
                 intent.addCategory(Intent.CATEGORY_HOME)
@@ -344,17 +350,28 @@ class ActionExecutor(private val context: Context) {
                 shareRecentPhoto(command.contactName, command.searchPlatform)
             }
             CommandType.READ_NOTIFICATIONS -> {
-                val notifications = com.example.jago.service.JagoAccessibilityService
-                    .readNotifications()
-                speak(notifications)
+                // Handled in WakeWordService for follow-up flow
+                JagoTTS.speakBilingual("Reading notifications.", "Notifications sun rahe hain.")
             }
             CommandType.READ_SCREEN -> {
                 val screenText = com.example.jago.service.JagoAccessibilityService
                     .readScreen()
                 speak(screenText)
             }
+            CommandType.SET_LANGUAGE -> {
+                val lang = command.messageBody ?: "en"
+                JagoTTS.setLanguage(lang)
+                if (lang == "hi") {
+                    JagoTTS.speak("Theek hai, ab main Hindi mein bolunga.")
+                } else {
+                    JagoTTS.speak("Okay, I'll speak in English from now on.")
+                }
+            }
             CommandType.UNKNOWN -> {
-                speak(command.aiResponse ?: "I didn't understand that command.")
+                JagoTTS.speakBilingual(
+                    command.aiResponse ?: "I didn't understand that command.",
+                    command.aiResponse ?: "Mujhe samajh nahi aaya."
+                )
             }
         }
     }

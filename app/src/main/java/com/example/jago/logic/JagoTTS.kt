@@ -19,6 +19,11 @@ object JagoTTS : TextToSpeech.OnInitListener {
         private set
     private var activeUtteranceId: String? = null
     
+    // Language setting — persists across commands
+    // "en" = English (default), "hi" = Hindi
+    var currentLanguage: String = "en"
+        private set
+    
     // Callback management
     private var pendingCallback: (() -> Unit)? = null
     var onSpeechStateChange: ((Boolean) -> Unit)? = null
@@ -100,6 +105,34 @@ object JagoTTS : TextToSpeech.OnInitListener {
             Log.w(TAG, "TTS not initialized yet, invoking callback immediately")
             onComplete()
         }
+    }
+
+    fun setLanguage(lang: String) {
+        currentLanguage = lang
+        val locale = if (lang == "hi") Locale("hi", "IN") else Locale.US
+        val result = tts?.setLanguage(locale)
+        if (result == TextToSpeech.LANG_MISSING_DATA ||
+            result == TextToSpeech.LANG_NOT_SUPPORTED) {
+            Log.e(TAG, "Language $lang not supported, falling back to English")
+            tts?.language = Locale.US
+            currentLanguage = "en"
+        }
+        Log.d(TAG, "Language set to: $lang")
+    }
+
+    // Speaks in currently selected language
+    fun speakBilingual(englishText: String, hindiText: String) {
+        val text = if (currentLanguage == "hi") hindiText else englishText
+        speak(text)
+    }
+
+    fun speakBilingualWithCallback(
+        englishText: String,
+        hindiText: String,
+        onComplete: () -> Unit
+    ) {
+        val text = if (currentLanguage == "hi") hindiText else englishText
+        speakWithCallback(text, onComplete)
     }
 
     fun stopSpeaking() {

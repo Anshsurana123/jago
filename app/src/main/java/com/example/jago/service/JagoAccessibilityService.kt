@@ -17,8 +17,14 @@ class JagoAccessibilityService : AccessibilityService() {
         private var isAutoSending: Boolean = false
         private var automationActive: Boolean = false
         
-        // Notification storage — stores recent notifications for reading
-        private val recentNotifications = mutableListOf<String>()
+        // Structured notification storage
+        data class NotificationItem(
+            val appName: String,
+            val sender: String?,   // contact name if available
+            val content: String,   // actual message text
+            val raw: String        // full string for fallback
+        )
+        private val recentNotifications = mutableListOf<NotificationItem>()
         private const val MAX_NOTIFICATIONS = 20
         
         // Polling variables
@@ -182,18 +188,18 @@ class JagoAccessibilityService : AccessibilityService() {
 
         fun isServiceRunning(): Boolean = instance != null
 
-        fun readNotifications(): String {
+        fun readNotifications(): List<NotificationItem> {
             synchronized(recentNotifications) {
-                if (recentNotifications.isEmpty()) {
-                    return "No new notifications"
-                }
-                // Return most recent 5 notifications, newest first
-                val toRead = recentNotifications.takeLast(5).reversed()
-                val result = toRead.joinToString(". ")
-                // Clear after reading so next call doesn't repeat
+                if (recentNotifications.isEmpty()) return emptyList()
+                val toRead = recentNotifications.takeLast(5).reversed().toList()
                 recentNotifications.clear()
-                Log.d("JagoAccessibility", "Reading ${toRead.size} notifications")
-                return result
+                return toRead
+            }
+        }
+
+        fun hasNotifications(): Boolean {
+            synchronized(recentNotifications) {
+                return recentNotifications.isNotEmpty()
             }
         }
 
@@ -508,26 +514,50 @@ class JagoAccessibilityService : AccessibilityService() {
         // Capture incoming notifications for "read notifications" feature
         if (event?.eventType == AccessibilityEvent.TYPE_NOTIFICATION_STATE_CHANGED) {
             val pkg = event.packageName?.toString() ?: "unknown"
-            val text = event.text?.joinToString(" ")?.trim()
-            if (!text.isNullOrEmpty() && pkg != "com.example.jago") {
+            val texts = event.text?.map { it.toString() }?.filter { it.isNotBlank() }
+            if (!texts.isNullOrEmpty() && pkg != "com.example.jago") {
                 val appName = try {
                     instance?.packageManager
                         ?.getApplicationLabel(
                             instance!!.packageManager.getApplicationInfo(pkg, 0)
                         )?.toString() ?: pkg
                 } catch (e: Exception) { pkg }
-        
-                val notification = "$appName: $text"
+
+                // Try to split sender from content
+                // WhatsApp format: ["Mummy: Main aa rahi hoon"]
+                // or ["Mummy", "Main aa rahi hoon"]
+                val fullText = texts.joinToString(" ")
+                val sender: String?
+                val content: String
+
+                if (texts.size >= 2) {
+                    sender = texts[0]
+                    content = texts.drop(1).joinToString(" ")
+                } else if (fullText.contains(": ")) {
+                    val parts = fullText.split(": ", limit = 2)
+                    sender = parts[0]
+                    content = parts[1]
+                } else {
+                    sender = null
+                    content = fullText
+                }
+
+                val item = NotificationItem(
+                    appName = appName,
+                    sender = sender,
+                    content = content,
+                    raw = fullText
+                )
+
                 synchronized(recentNotifications) {
-                    // Avoid duplicate consecutive notifications
-                    if (recentNotifications.lastOrNull() != notification) {
-                        recentNotifications.add(notification)
+                    if (recentNotifications.lastOrNull()?.raw != fullText) {
+                        recentNotifications.add(item)
                         if (recentNotifications.size > MAX_NOTIFICATIONS) {
                             recentNotifications.removeAt(0)
                         }
                     }
                 }
-                Log.d("JagoAccessibility", "Notification captured: $notification")
+                Log.d("JagoAccessibility", "Notification: app=$appName sender=$sender content=$content")
             }
         }
 
