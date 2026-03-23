@@ -63,6 +63,14 @@ class JagoAccessibilityService : AccessibilityService() {
             return result
         }
 
+        fun performBack(): Boolean {
+            val result = instance?.performGlobalAction(GLOBAL_ACTION_BACK) ?: false
+            if (result) {
+                Log.d("JagoAccessibility", "Back action performed")
+            }
+            return result
+        }
+
         fun clickShutter(): Boolean {
             val root = instance?.rootInActiveWindow ?: return false
             val nodes = findShutterNodes(root)
@@ -514,7 +522,7 @@ class JagoAccessibilityService : AccessibilityService() {
         // Capture incoming notifications for "read notifications" feature
         if (event?.eventType == AccessibilityEvent.TYPE_NOTIFICATION_STATE_CHANGED) {
             val pkg = event.packageName?.toString() ?: "unknown"
-            val texts = event.text?.map { it.toString() }?.filter { it.isNotBlank() }
+            val texts = event.text.map { it.toString() }.filter { it.isNotBlank() }
             if (!texts.isNullOrEmpty() && pkg != "com.example.jago") {
                 val appName = try {
                     instance?.packageManager
@@ -565,8 +573,17 @@ class JagoAccessibilityService : AccessibilityService() {
         if (event?.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
             if (com.example.jago.logic.JagoTTS.isSpeaking) {
                 val packageName = event.packageName?.toString()
-                if (packageName != null && packageName != "com.example.jago") {
-                    Log.d("JagoAccessibility", "Window changed to $packageName -> Stopping speech")
+                // Only interrupt if it's a real foreground app change
+                // NOT system UI, notification shade, or our own app
+                val systemPackages = listOf(
+                    "com.example.jago",
+                    "com.android.systemui",
+                    "android",
+                    "com.android.launcher",
+                    "com.google.android.inputmethod"
+                )
+                if (packageName != null && systemPackages.none { packageName.startsWith(it) }) {
+                    Log.d("JagoAccessibility", "App changed to $packageName -> Stopping speech")
                     com.example.jago.logic.JagoTTS.stopSpeaking()
                 }
             }

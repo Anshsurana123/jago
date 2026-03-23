@@ -35,9 +35,10 @@ class WakeWordService : Service() {
     }
 
     // 3-model openWakeWord pipeline
-    private var melSession: OrtSession? = null  // replace melModel
+    private var melSession: OrtSession? = null
     private var embeddingModel: Interpreter? = null
     private var wakeWordModel: Interpreter? = null
+    private val ortEnv: OrtEnvironment = OrtEnvironment.getEnvironment() // created once, not per-frame
 
     // Pipeline state
     @Volatile private var isDetecting = false
@@ -47,7 +48,7 @@ class WakeWordService : Service() {
     // Rolling buffers
     private val melFrameBuffer = ArrayDeque<FloatArray>()
     private val embeddingBuffer = ArrayDeque<FloatArray>()
-
+    
     // Pipeline constants
     private val CHUNK_SIZE = 1280          // 80ms at 16kHz
     private val MEL_FRAMES_NEEDED = 76     // mel frames per embedding
@@ -74,6 +75,9 @@ class WakeWordService : Service() {
     private var currentNotificationIndex = 0
     private var isWaitingForNotificationResponse = false
 
+    // True when Jago is mid-flow and should not auto-close on TTS end
+    @Volatile private var isMidFlow = false
+
     override fun onCreate() {
         super.onCreate()
         isServiceRunning = true
@@ -83,7 +87,7 @@ class WakeWordService : Service() {
         speechAdapter = AndroidSTTAdapter(this)
         
         JagoTTS.onSpeechStateChange = { isSpeaking ->
-            if (!isSpeaking) {
+            if (!isSpeaking && !isMidFlow) {
                  hideOverlayWithDelay()
             }
         }
@@ -97,9 +101,8 @@ class WakeWordService : Service() {
     private fun initWakeWord() {
         try {
             // Mel → ONNX (this is what openWakeWord actually uses)
-            val env = OrtEnvironment.getEnvironment()
             val melBytes = assets.open("melspectrogram.onnx").readBytes()
-            melSession = env.createSession(melBytes, OrtSession.SessionOptions())
+            melSession = ortEnv.createSession(melBytes, OrtSession.SessionOptions())
     
             // Embedding + wake word → TFLite
             embeddingModel = Interpreter(FileUtil.loadMappedFile(this, "embedding_model.tflite"))
@@ -160,22 +163,22 @@ class WakeWordService : Service() {
                 val floatChunk = FloatArray(CHUNK_SIZE) { chunkBuffer[it] / 32768f }
 
                 // STEP B — melspectrogram via ONNX
-                val env = OrtEnvironment.getEnvironment()
+                val env = ortEnv
                 val inputTensor = ai.onnxruntime.OnnxTensor.createTensor(
                     env,
                     java.nio.FloatBuffer.wrap(floatChunk),
                     longArrayOf(1, 1280)
                 )
-                val melResults = melSession?.run(mapOf("input" to inputTensor))
-                val melArray = (melResults?.get(0)?.value as? Array<*>)
-                    ?.let { it[0] as? Array<*> }
-                    ?.let { it[0] as? Array<*> }
-                    ?.map { (it as FloatArray) }
-                
-                melResults?.close()
-                inputTensor.close()
-                
-                if (melArray == null) continue
+                try {
+                    val melResults = melSession?.run(mapOf("input" to inputTensor))
+                    val melArray = (melResults?.get(0)?.value as? Array<*>)
+                        ?.let { it[0] as? Array<*> }
+                        ?.let { it[0] as? Array<*> }
+                        ?.map { (it as FloatArray) }
+                    
+                    melResults?.close()
+                    
+                    if (melArray == null) continue
 
                 // STEP C — normalize and push frames
                 for (melFrame in melArray) {
@@ -240,6 +243,9 @@ class WakeWordService : Service() {
                     melFrameBuffer.clear()
                     embeddingBuffer.clear()
                     Handler(Looper.getMainLooper()).post { showOverlay() }
+                }
+                } finally {
+                    inputTensor.close()
                 }
             }
 
@@ -368,7 +374,7 @@ class WakeWordService : Service() {
 
                 // Translate async then send
                 serviceScope.launch {
-                    val originalBody = command.messageBody!!
+                    val originalBody = command.messageBody ?: ""
                     JagoTTS.speak("Translating message...")
 
                     val translatedBody = if (wantsHindi) {
@@ -438,9 +444,13 @@ class WakeWordService : Service() {
 
     private fun handleNewAlarmCommand(command: Command) {
         if (command.missingTime) {
+             isMidFlow = true
              isWaitingForAlarmTime = true
              speechAdapter?.isFollowUpListening = true
-             JagoTTS.speakWithCallback("When should I set the alarm? / Alarm kab lagaun?") {
+             JagoTTS.speakBilingualWithCallback(
+                 "When should I set the alarm?",
+                 "Alarm kab lagaun?"
+             ) {
                  startListening()
              }
         } else {
@@ -456,11 +466,15 @@ class WakeWordService : Service() {
         if (alarmCmd != null && !alarmCmd.missingTime) {
             actionExecutor?.execute(alarmCmd)
             isWaitingForAlarmTime = false
+            isMidFlow = false
             speechAdapter?.isFollowUpListening = false
             hideOverlayWithDelay()
         } else {
             speechAdapter?.isFollowUpListening = true
-            JagoTTS.speakWithCallback("I didn't catch the time. Please say something like '7 am'.") {
+            JagoTTS.speakBilingualWithCallback(
+                "I didn't catch the time. Please say something like '7 am'.",
+                "Samay samajh nahi aaya. '7 am' jaise bolein."
+            ) {
                 startListening()
             }
         }
@@ -469,19 +483,27 @@ class WakeWordService : Service() {
     private fun handleNewReminderCommand(command: Command) {
         when {
             command.missingMessage -> {
+                isMidFlow = true
                 isWaitingForReminderMessage = true
                 pendingTriggerMillis = command.triggerMillis
                 pendingFormattedTime = command.formattedTime
                 speechAdapter?.isFollowUpListening = true
-                JagoTTS.speakWithCallback("What should I remind you about? / Kya yaad dilana hai?") {
+                JagoTTS.speakBilingualWithCallback(
+                    "What should I remind you about?",
+                    "Kya yaad dilana hai?"
+                ) {
                     startListening()
                 }
             }
             command.missingTime -> {
+                isMidFlow = true
                 isWaitingForReminderTime = true
                 pendingReminderMessage = command.messageBody
                 speechAdapter?.isFollowUpListening = true
-                JagoTTS.speakWithCallback("When should I remind you? / Kab yaad dilana hai?") {
+                JagoTTS.speakBilingualWithCallback(
+                    "When should I remind you?",
+                    "Kab yaad dilana hai?"
+                ) {
                     startListening()
                 }
             }
@@ -508,7 +530,10 @@ class WakeWordService : Service() {
             hideOverlayWithDelay()
         } else {
             speechAdapter?.isFollowUpListening = true
-            JagoTTS.speakWithCallback("I need a time for the reminder. / Samay batao.") {
+            JagoTTS.speakBilingualWithCallback(
+                "I need a time for the reminder.",
+                "Samay batao."
+            ) {
                 startListening()
             }
         }
@@ -521,7 +546,10 @@ class WakeWordService : Service() {
         if (pendingTriggerMillis == null) {
             isWaitingForReminderTime = true
             speechAdapter?.isFollowUpListening = true
-            JagoTTS.speakWithCallback("When should I remind you? / Kab yaad dilana hai?") {
+            JagoTTS.speakBilingualWithCallback(
+                    "When should I remind you?",
+                    "Kab yaad dilana hai?"
+                ) {
                 startListening()
             }
         } else {
@@ -544,6 +572,7 @@ class WakeWordService : Service() {
         pendingReminderMessage = null
         pendingTriggerMillis = null
         pendingFormattedTime = null
+        isMidFlow = false
     }
 
     private fun handleScheduledCommand(command: Command) {
@@ -570,23 +599,28 @@ class WakeWordService : Service() {
         val lower = text.lowercase()
 
         val wantsNext = listOf(
-            "agla", "next", "agla padhao", "aage", "aur",
-            "next one", "aur padhao", "continue"
+            "agla", "next", "agla padhao", "aage", "aur", "agli",
+            "next one", "aur padhao", "continue", "aur sunao",
+            "ha", "haan", "yes", "okay", "ok", "theek hai",
+            "suno", "padhao", "batao"
         ).any { lower.contains(it) }
 
         val wantsReply = listOf(
             "jawab", "reply", "jawab dena", "jawab do",
-            "respond", "answer", "message karo"
+            "respond", "answer", "message karo", "bhejo",
+            "send", "likho", "type karo", "respond karo"
         ).any { lower.contains(it) }
 
         val wantsStop = listOf(
             "band", "stop", "bas", "rukh", "enough",
-            "theek hai", "ok", "okay"
+            "nahi", "no", "mat padhao",
+            "rehne do", "chodo", "skip"
         ).any { lower.contains(it) }
 
         when {
             wantsStop -> {
                 isWaitingForNotificationResponse = false
+                isMidFlow = false
                 pendingNotifications = emptyList()
                 currentNotificationIndex = 0
                 JagoTTS.speakBilingual("Okay, stopping.", "Theek hai.")
@@ -594,6 +628,7 @@ class WakeWordService : Service() {
             }
             wantsReply -> {
                 isWaitingForNotificationResponse = false
+                isMidFlow = false
                 val current = pendingNotifications.getOrNull(currentNotificationIndex)
                 if (current != null) {
                     JagoTTS.speakBilingual(
@@ -616,6 +651,7 @@ class WakeWordService : Service() {
                     readSingleNotification(pendingNotifications[currentNotificationIndex])
                 } else {
                     isWaitingForNotificationResponse = false
+                    isMidFlow = false
                     pendingNotifications = emptyList()
                     currentNotificationIndex = 0
                     JagoTTS.speakBilingual(
@@ -639,6 +675,7 @@ class WakeWordService : Service() {
     private fun readSingleNotification(
         item: com.example.jago.service.JagoAccessibilityService.Companion.NotificationItem
     ) {
+        isMidFlow = true
         val remaining = pendingNotifications.size - currentNotificationIndex - 1
 
         val summary = if (item.sender != null) {
@@ -671,15 +708,27 @@ class WakeWordService : Service() {
 
     private fun callCerebrasAsync(text: String) {
         serviceScope.launch {
-            // Give user audio feedback that we're thinking (important for blind users)
-            JagoTTS.speak("Let me think...")
+            // Only speak "Let me think..." if response takes longer than 800ms
+            var responded = false
+            val thinkingJob = serviceScope.launch {
+                kotlinx.coroutines.delay(800)
+                if (!responded) {
+                    JagoTTS.speakBilingual("Let me think...", "Soch raha hoon...")
+                }
+            }
             
             val response = com.example.jago.logic.CerebrasClient.askAI(text, useSmartModel = false)
+            responded = true
+            thinkingJob.cancel()
+            
             if (!response.isNullOrEmpty()) {
                 actionExecutor?.execute(Command(CommandType.AI_RESPONSE, aiResponse = response))
             } else {
                 // Cerebras timed out or failed — tell the user clearly
-                JagoTTS.speak("Sorry, I couldn't connect right now. Please try again.")
+                JagoTTS.speakBilingual(
+                    "Sorry, I couldn't connect right now. Please try again.",
+                    "Maaf karein, abhi connect nahi ho saka. Dobara try karein."
+                )
                 hideOverlayWithDelay()
             }
         }

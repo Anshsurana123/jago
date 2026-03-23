@@ -51,10 +51,16 @@ class ActionExecutor(private val context: Context) {
                         }
                         is ContactResolver.ResolutionResult.Ambiguous -> {
                             val names = result.matches.take(3).joinToString(" or ") { c -> c.name }
-                            speak("I found multiple contacts: $names. Please be more specific.")
+                            JagoTTS.speakBilingual(
+                                "I found multiple contacts: $names. Please be more specific.",
+                                "Kai contacts mile: $names. Pura naam bolein."
+                            )
                         }
                         is ContactResolver.ResolutionResult.NoMatch -> {
-                            speak("I couldn't find a contact named $it")
+                            JagoTTS.speakBilingual(
+                                "I couldn't find a contact named $it",
+                                "$it naam ka contact nahi mila"
+                            )
                         }
                     }
                 }
@@ -68,7 +74,7 @@ class ActionExecutor(private val context: Context) {
                 val message = command.messageBody
 
                 if (contact == null) {
-                     speak("Who should I send the message to?")
+                     JagoTTS.speakBilingual("Who should I send the message to?", "Message kisko bhejna hai?")
                      return
                 }
 
@@ -76,7 +82,7 @@ class ActionExecutor(private val context: Context) {
                 when (val result = resolver.resolveContact(contact)) {
                     is ContactResolver.ResolutionResult.Success -> {
                         if (message.isNullOrEmpty()) {
-                             speak("What should the message say?")
+                             JagoTTS.speakBilingual("What should the message say?", "Message mein kya likhna hai?")
                              // TODO: Implement follow-up state for message capture
                              return
                         }
@@ -88,10 +94,16 @@ class ActionExecutor(private val context: Context) {
                     }
                     is ContactResolver.ResolutionResult.Ambiguous -> {
                         val names = result.matches.take(3).joinToString(" or ") { c -> c.name }
-                        speak("I found multiple contacts: $names. Please say the full name.")
+                        JagoTTS.speakBilingual(
+                            "I found multiple contacts: $names. Please say the full name.",
+                            "Kai contacts mile: $names. Pura naam bolein."
+                        )
                     }
                     is ContactResolver.ResolutionResult.NoMatch -> {
-                        speak("I couldn't find a contact named $contact")
+                        JagoTTS.speakBilingual(
+                            "I couldn't find a contact named $contact",
+                            "$contact naam ka contact nahi mila"
+                        )
                     }
                 }
             }
@@ -100,12 +112,12 @@ class ActionExecutor(private val context: Context) {
             }
             CommandType.OPEN_APP -> {
                 command.contactName?.let {
-                    speak("Opening $it")
+                    JagoTTS.speakBilingual("Opening $it", "$it khol raha hoon")
                     launchAppByName(it)
                 }
             }
             CommandType.OPEN_SCHEDULE -> {
-                 speak("Opening Scheduled Tasks")
+                 JagoTTS.speakBilingual("Opening Scheduled Tasks", "Schedule khol raha hoon")
                  val intent = Intent(context, com.example.jago.ui.ScheduledTasksActivity::class.java).apply {
                      addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                  }
@@ -115,10 +127,10 @@ class ActionExecutor(private val context: Context) {
                 // This should be handled by WakeWordService, but if it reaches here, execute inner command?
                 // Or just speak error.
                 if (command.scheduledCommand != null) {
-                    speak("Executing scheduled command now.")
+                    JagoTTS.speakBilingual("Executing scheduled command now.", "Scheduled command chala raha hoon.")
                     execute(command.scheduledCommand)
                 } else {
-                    speak("I cannot execute this scheduled command.")
+                    JagoTTS.speakBilingual("I cannot execute this scheduled command.", "Yeh scheduled command nahi chala sakta.")
                 }
             }
             CommandType.FLASHLIGHT_ON -> {
@@ -182,7 +194,10 @@ class ActionExecutor(private val context: Context) {
                 if (success) {
                     Log.d("ActionExecutor", "Screenshot triggered")
                 } else {
-                    speak("I need accessibility permission to take a screenshot. Please enable it in settings.")
+                    JagoTTS.speakBilingual(
+                        "I need accessibility permission to take a screenshot.",
+                        "Screenshot lene ke liye accessibility permission chahiye."
+                    )
                 }
             }
             CommandType.SCREENSHOT_AND_WHATSAPP -> {
@@ -190,7 +205,7 @@ class ActionExecutor(private val context: Context) {
                 if (contact != null) {
                     smartCaptureAndShare(contact)
                 } else {
-                    speak("Who should I send the screenshot to?")
+                    JagoTTS.speakBilingual("Who should I send the screenshot to?", "Screenshot kisko bhejna hai?")
                 }
             }
             CommandType.ENABLE_DND -> {
@@ -232,7 +247,7 @@ class ActionExecutor(private val context: Context) {
                     }, 2500)
                 } catch (e: Exception) {
                     Log.e("ActionExecutor", "Failed to launch camera", e)
-                    speak("I couldn't open the camera.")
+                    JagoTTS.speakBilingual("I couldn't open the camera.", "Camera nahi khul saka.")
                 }
             }
             CommandType.SET_REMINDER -> {
@@ -242,7 +257,7 @@ class ActionExecutor(private val context: Context) {
                 
                 if (message.isNotEmpty() && triggerMillis > 0L) {
                     ReminderEngine.scheduleReminder(context, ReminderData(message, triggerMillis))
-                    speak("Reminder set for $formattedTime")
+                    JagoTTS.speakBilingual("Reminder set for $formattedTime", "$formattedTime ke liye reminder laga diya")
                 } else if (command.missingMessage) {
                     // Logic handled in WakeWordService for follow-up
                 } else if (command.missingTime) {
@@ -251,11 +266,11 @@ class ActionExecutor(private val context: Context) {
             }
             CommandType.CLOSE_APP -> {
                 JagoTTS.speakBilingual("Closing the app", "App band kar raha hoon")
-                // Simple implementation: go home
-                val intent = Intent(Intent.ACTION_MAIN)
-                intent.addCategory(Intent.CATEGORY_HOME)
-                intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK
-                context.startActivity(intent)
+                // Use accessibility service to press back 3 times to properly close
+                val handler = Handler(Looper.getMainLooper())
+                handler.postDelayed({ JagoAccessibilityService.performBack() }, 300)
+                handler.postDelayed({ JagoAccessibilityService.performBack() }, 600)
+                handler.postDelayed({ JagoAccessibilityService.performBack() }, 900)
             }
             CommandType.AI_RESPONSE -> {
                 command.aiResponse?.let { speak(it) }
@@ -266,9 +281,9 @@ class ActionExecutor(private val context: Context) {
                     Log.d("ActionExecutor", "Calculating: $expression")
                     val result = CalculatorEngine.evaluate(expression)
                     Log.d("ActionExecutor", "Result: $result")
-                    speak("The answer is $result")
+                    JagoTTS.speakBilingual("The answer is $result", "Jawab hai $result")
                 } else {
-                    speak("I couldn't calculate that.")
+                    JagoTTS.speakBilingual("I couldn't calculate that.", "Calculate nahi kar saka.")
                 }
             }
             CommandType.SEARCH -> {
@@ -278,12 +293,12 @@ class ActionExecutor(private val context: Context) {
                 if (query.isNotEmpty()) {
                     executeSearch(query, platform)
                 } else {
-                    speak("I didn't catch what to search for.")
+                    JagoTTS.speakBilingual("I didn't catch what to search for.", "Search kya karna hai samajh nahi aaya.")
                 }
             }
             CommandType.SET_ALARM -> {
                 if (command.missingTime) {
-                    speak("What time should I set the alarm?")
+                    JagoTTS.speakBilingual("What time should I set the alarm?", "Alarm kitne baje lagaun?")
                 } else {
                     val hour = command.hour ?: 9
                     val minute = command.minute ?: 0
@@ -312,7 +327,10 @@ class ActionExecutor(private val context: Context) {
                      )
                      
                      com.example.jago.service.alarm.AlarmEngine.setAlarm(context, data)
-                     speak("Alarm set for $hour ${if(minute < 10) "0$minute" else "$minute"}")
+                     JagoTTS.speakBilingual(
+                         "Alarm set for $hour ${if(minute < 10) "0$minute" else "$minute"}",
+                         "Alarm $hour ${if(minute < 10) "0$minute" else "$minute"} ke liye laga diya"
+                     )
                 }
             CommandType.PLAY_SPOTIFY -> {
                 val query = command.messageBody ?: ""
@@ -343,7 +361,7 @@ class ActionExecutor(private val context: Context) {
 
                 } catch (e: Exception) {
                     Log.e("ActionExecutor", "Spotify launch failed", e)
-                    speak("Spotify is not installed or I couldn't open it.")
+                    JagoTTS.speakBilingual("Spotify is not installed or I couldn't open it.", "Spotify nahi khul saka.")
                 }
             }
             CommandType.SEND_RECENT_PHOTO -> {
@@ -359,6 +377,7 @@ class ActionExecutor(private val context: Context) {
                 speak(screenText)
             }
             CommandType.SET_LANGUAGE -> {
+                // Handled in WakeWordService — this is a safety fallback
                 val lang = command.messageBody ?: "en"
                 JagoTTS.setLanguage(lang)
                 if (lang == "hi") {

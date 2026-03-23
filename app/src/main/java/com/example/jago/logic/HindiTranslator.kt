@@ -232,8 +232,12 @@ object HindiTranslator {
         if (text.any { it.code in 0x0900..0x097F }) return true
         // Check for common Hinglish words
         val hindiMarkers = listOf("karo", "karna", "jalao", "badhao", "batao",
-            "kholo", "chalao", "lagao", "bhejo", "band", "baje", "yaad",
-            "awaaz", "gaana", "subah", "shaam", "raat", "kal", "abhi")
-        return hindiMarkers.any { text.lowercase().contains(it) }
+            "kholo", "chalao", "lagao", "bhejo", "baje", "yaad",
+            "awaaz", "gaana", "subah", "shaam", "raat", "abhi",
+            "bolo", "padhao", "sunao", "dilao", "bhago")
+        // Use word-boundary matching to avoid false positives on English words
+        // e.g. "domain" contains "mai", "band" matches "rock band"
+        val lower = text.lowercase()
+        return hindiMarkers.any { Regex("\\b${Regex.escape(it)}\\b").containsMatchIn(lower) }
     }
 }

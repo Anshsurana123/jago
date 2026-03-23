@@ -96,16 +96,25 @@ class CommandParser {
             "screen batao", "kya dikh raha hai", "screen read karo"
         ),
         "SET_LANGUAGE" to listOf(
-            // English triggers
-            "speak in english", "english mai bolo", "english mein bolo",
+            // English — all variations
+            "speak in english", "speak english",
+            "english mai bolo", "english mein bolo", "english me bolo",
+            "english main bolo", "english m bolo",
             "angreji mai bolo", "angreji mein bolo", "angreji me bolo",
-            "speak english", "switch to english", "english language",
+            "angreji main bolo", "angreji bol",
+            "switch to english", "english language",
             "talk in english", "respond in english",
-            // Hindi triggers
-            "speak in hindi", "hindi mai bolo", "hindi mein bolo",
-            "hindi me bolo", "hindi mein bol", "hindi mai bol",
-            "switch to hindi", "hindi language", "talk in hindi",
-            "respond in hindi", "bolo hindi mein"
+            "english mein", "english mai", "english me",
+            "angreji mein", "angreji mai",
+            // Hindi — all variations
+            "speak in hindi", "speak hindi",
+            "hindi mai bolo", "hindi mein bolo", "hindi me bolo",
+            "hindi main bolo", "hindi m bolo", "hindi bol",
+            "switch to hindi", "hindi language",
+            "talk in hindi", "respond in hindi",
+            "bolo hindi mein", "hindi mein bol",
+            "hindi mein", "hindi mai", "hindi me",
+            "hindi main"
         )
     )
     
@@ -596,14 +605,18 @@ class CommandParser {
             "READ_NOTIFICATIONS" -> Command(CommandType.READ_NOTIFICATIONS)
             "READ_SCREEN" -> Command(CommandType.READ_SCREEN)
             "SET_LANGUAGE" -> {
-                // Detect which language from the text
-                val isHindi = listOf(
-                    "hindi", "hindi mai", "hindi mein", "hindi me"
-                ).any { cleanText.contains(it) }
-                Command(
-                    type = CommandType.SET_LANGUAGE,
-                    messageBody = if (isHindi) "hi" else "en"
-                )
+                // Check for Hindi vs English keywords
+                val hindiKeywords = listOf("hindi", "hindi mein", "hindi mai", "hindi me", "hindi main")
+                val englishKeywords = listOf("english", "angreji")
+                val isHindi = hindiKeywords.any { cleanText.contains(it) }
+                val isEnglish = englishKeywords.any { cleanText.contains(it) }
+                // If both detected (shouldn't happen) default to Hindi
+                val lang = when {
+                    isHindi && !isEnglish -> "hi"
+                    isEnglish -> "en"
+                    else -> "en" // default
+                }
+                Command(type = CommandType.SET_LANGUAGE, messageBody = lang)
             }
             else -> {
                 // Try parsing as Math

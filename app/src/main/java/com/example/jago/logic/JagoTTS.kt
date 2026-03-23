@@ -18,6 +18,12 @@ object JagoTTS : TextToSpeech.OnInitListener {
     var isSpeaking = false
         private set
     private var activeUtteranceId: String? = null
+    private var hasActiveCallback = false
+    
+    // Language persistence
+    private var appContext: Context? = null
+    private const val PREFS_NAME = "jago_prefs"
+    private const val KEY_LANGUAGE = "language"
     
     // Language setting — persists across commands
     // "en" = English (default), "hi" = Hindi
@@ -29,14 +35,20 @@ object JagoTTS : TextToSpeech.OnInitListener {
     var onSpeechStateChange: ((Boolean) -> Unit)? = null
 
     fun init(context: Context) {
+        appContext = context.applicationContext
         if (tts == null) {
             tts = TextToSpeech(context.applicationContext, this)
         }
+        // Load saved language preference
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        currentLanguage = prefs.getString(KEY_LANGUAGE, "en") ?: "en"
     }
 
     override fun onInit(status: Int) {
         if (status == TextToSpeech.SUCCESS) {
-            tts?.language = Locale.US
+            // Apply saved language preference
+            val locale = if (currentLanguage == "hi") Locale("hi", "IN") else Locale.US
+            tts?.language = locale
             tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
                 override fun onStart(utteranceId: String?) {
                     Log.d(TAG, "TTS started: $utteranceId")
@@ -52,9 +64,10 @@ object JagoTTS : TextToSpeech.OnInitListener {
                     // Only execute callback if it matches the active utterance
                     if (utteranceId == activeUtteranceId) {
                         activeUtteranceId = null
+                        hasActiveCallback = false
                         // Post delayed callback to ensure TTS audio clears (500ms buffer)
                         handler.postDelayed({
-                            Log.d(TAG, "TTS finished → Starting follow-up listening")
+                            Log.d(TAG, "TTS finished → Starting follow-up")
                             pendingCallback?.invoke()
                             pendingCallback = null
                         }, 500)
@@ -66,6 +79,7 @@ object JagoTTS : TextToSpeech.OnInitListener {
                     Log.e(TAG, "TTS error: $utteranceId")
                     isSpeaking = false
                     activeUtteranceId = null
+                    hasActiveCallback = false
                     pendingCallback = null
                     handler.post { onSpeechStateChange?.invoke(false) }
                 }
@@ -79,11 +93,11 @@ object JagoTTS : TextToSpeech.OnInitListener {
     fun speak(text: String) {
         if (isInitialized) {
             val utteranceId = "JAGO_${System.currentTimeMillis()}"
-            activeUtteranceId = utteranceId
-            
-            // Use QUEUE_ADD if already speaking to prevent cut-offs
+            // Only update activeUtteranceId if no callback is waiting
+            if (!hasActiveCallback) {
+                activeUtteranceId = utteranceId
+            }
             val queueMode = if (isSpeaking) TextToSpeech.QUEUE_ADD else TextToSpeech.QUEUE_FLUSH
-            
             tts?.speak(text, queueMode, null, utteranceId)
         } else {
             Log.w(TAG, "TTS not initialized yet")
@@ -92,13 +106,11 @@ object JagoTTS : TextToSpeech.OnInitListener {
 
     fun speakWithCallback(text: String, onComplete: () -> Unit) {
         if (isInitialized) {
+            hasActiveCallback = true
             pendingCallback = onComplete
             val utteranceId = "JAGO_${System.currentTimeMillis()}"
             activeUtteranceId = utteranceId
-            
-            // Use QUEUE_ADD if already speaking to prevent cut-offs
             val queueMode = if (isSpeaking) TextToSpeech.QUEUE_ADD else TextToSpeech.QUEUE_FLUSH
-            
             tts?.speak(text, queueMode, null, utteranceId)
             Log.d(TAG, "Speaking with callback: $text (ID: $utteranceId)")
         } else {
@@ -117,7 +129,10 @@ object JagoTTS : TextToSpeech.OnInitListener {
             tts?.language = Locale.US
             currentLanguage = "en"
         }
-        Log.d(TAG, "Language set to: $lang")
+        // Persist the setting
+        appContext?.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            ?.edit()?.putString(KEY_LANGUAGE, currentLanguage)?.apply()
+        Log.d(TAG, "Language set to: $currentLanguage")
     }
 
     // Speaks in currently selected language
@@ -141,6 +156,7 @@ object JagoTTS : TextToSpeech.OnInitListener {
             tts?.stop()
             isSpeaking = false
             activeUtteranceId = null
+            hasActiveCallback = false
             pendingCallback = null
             handler.removeCallbacksAndMessages(null)
             handler.post { onSpeechStateChange?.invoke(false) }
