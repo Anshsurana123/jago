@@ -620,6 +620,7 @@ class WakeWordService : Service() {
             wantsStop -> {
                 isWaitingForNotificationResponse = false
                 isMidFlow = false
+                speechAdapter?.isFollowUpListening = false
                 pendingNotifications = emptyList()
                 currentNotificationIndex = 0
                 JagoTTS.speakBilingual("Okay, stopping.", "Theek hai.")
@@ -628,6 +629,7 @@ class WakeWordService : Service() {
             wantsReply -> {
                 isWaitingForNotificationResponse = false
                 isMidFlow = false
+                speechAdapter?.isFollowUpListening = false
                 val current = pendingNotifications.getOrNull(currentNotificationIndex)
                 if (current != null) {
                     JagoTTS.speakBilingual(
@@ -651,6 +653,7 @@ class WakeWordService : Service() {
                 } else {
                     isWaitingForNotificationResponse = false
                     isMidFlow = false
+                    speechAdapter?.isFollowUpListening = false
                     pendingNotifications = emptyList()
                     currentNotificationIndex = 0
                     JagoTTS.speakBilingual(
@@ -665,6 +668,7 @@ class WakeWordService : Service() {
                     "Say 'next' for next, 'reply' to reply, or 'stop' to stop.",
                     "Agla sunne ke liye 'agla' bolo, jawab dene ke liye 'jawab', band karne ke liye 'band'."
                 ) {
+                    speechAdapter?.isFollowUpListening = true
                     startListening()
                 }
             }
@@ -700,6 +704,7 @@ class WakeWordService : Service() {
             }
             JagoTTS.speakWithCallback(followUp) {
                 isWaitingForNotificationResponse = true
+                speechAdapter?.isFollowUpListening = true
                 startListening()
             }
         }
