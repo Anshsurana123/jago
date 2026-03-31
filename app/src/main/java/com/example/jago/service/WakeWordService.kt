@@ -71,7 +71,7 @@ class WakeWordService : Service() {
     private var isWaitingForAlarmTime = false
 
     // Notification reading follow-up state
-    private var pendingNotifications = listOf<com.example.jago.service.JagoAccessibilityService.Companion.NotificationItem>()
+    private var pendingNotifications = listOf<com.example.jago.logic.NotificationStore.NotificationItem>()
     private var currentNotificationIndex = 0
     private var isWaitingForNotificationResponse = false
     
@@ -746,7 +746,7 @@ class WakeWordService : Service() {
     }
 
     private fun readSingleNotification(
-        item: com.example.jago.service.JagoAccessibilityService.Companion.NotificationItem
+        item: com.example.jago.logic.NotificationStore.NotificationItem
     ) {
         isMidFlow = true
         val remaining = pendingNotifications.size - currentNotificationIndex - 1

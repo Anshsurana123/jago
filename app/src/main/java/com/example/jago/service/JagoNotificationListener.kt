@@ -3,14 +3,24 @@ package com.example.jago.service
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import android.util.Log
+import com.example.jago.logic.NotificationStore
 
 class JagoNotificationListener : NotificationListenerService() {
+
+    override fun onListenerConnected() {
+        super.onListenerConnected()
+        Log.d("JagoNotification", "Notification Listener CONNECTED ✓")
+    }
+
+    override fun onListenerDisconnected() {
+        super.onListenerDisconnected()
+        Log.d("JagoNotification", "Notification Listener DISCONNECTED")
+    }
 
     override fun onNotificationPosted(sbn: StatusBarNotification) {
         try {
             val pkg = sbn.packageName ?: return
 
-            // Skip our own notifications and system ones
             val skipPackages = listOf(
                 "com.example.jago",
                 "android",
@@ -19,18 +29,14 @@ class JagoNotificationListener : NotificationListenerService() {
             )
             if (skipPackages.any { pkg.startsWith(it) }) return
 
+            // Skip group summaries
+            if ((sbn.notification.flags and android.app.Notification.FLAG_GROUP_SUMMARY) != 0) return
+
             val extras = sbn.notification?.extras ?: return
-
-            // Skip group summaries (e.g. '2 messages from 2 chats')
-            if ((sbn.notification.flags and android.app.Notification.FLAG_GROUP_SUMMARY) != 0) {
-                return
-            }
-
             val title = extras.getString("android.title") ?: ""
             val text = extras.getCharSequence("android.text")?.toString() ?: ""
             val bigText = extras.getCharSequence("android.bigText")?.toString() ?: ""
 
-            // Use bigText if available (contains full message)
             val content = if (bigText.isNotEmpty()) bigText else text
             if (content.isEmpty()) return
 
@@ -40,39 +46,38 @@ class JagoNotificationListener : NotificationListenerService() {
                 ).toString()
             } catch (e: Exception) { pkg }
 
-            // Parse sender from title
-            // WhatsApp format: "Mummy" or "Mummy: message" or "Group Name"
             val sender: String?
             val messageContent: String
 
-            if (title.isNotEmpty() && content != title) {
-                sender = title
-                messageContent = content
-            } else if (content.contains(": ")) {
-                val parts = content.split(": ", limit = 2)
-                sender = parts[0]
-                messageContent = parts[1]
-            } else {
-                sender = null
-                messageContent = content
+            when {
+                title.isNotEmpty() && content != title -> {
+                    sender = title
+                    messageContent = content
+                }
+                content.contains(": ") -> {
+                    val parts = content.split(": ", limit = 2)
+                    sender = parts[0]
+                    messageContent = parts[1]
+                }
+                else -> {
+                    sender = null
+                    messageContent = content
+                }
             }
 
-            val item = JagoAccessibilityService.Companion.NotificationItem(
+            val item = NotificationStore.NotificationItem(
                 appName = appName,
                 sender = sender,
                 content = messageContent,
                 raw = "$title $content"
             )
 
-            JagoAccessibilityService.addNotification(item)
-            Log.d("JagoNotification", "Captured: $appName | $sender | $messageContent")
+            NotificationStore.add(item)
 
         } catch (e: Exception) {
-            Log.e("JagoNotification", "Error processing notification", e)
+            Log.e("JagoNotification", "Error", e)
         }
     }
 
-    override fun onNotificationRemoved(sbn: StatusBarNotification) {
-        // Not needed for now
-    }
+    override fun onNotificationRemoved(sbn: StatusBarNotification) {}
 }

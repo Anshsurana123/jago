@@ -17,16 +17,7 @@ class JagoAccessibilityService : AccessibilityService() {
         private var isAutoSending: Boolean = false
         private var automationActive: Boolean = false
         
-        // Structured notification storage
-        data class NotificationItem(
-            val appName: String,
-            val sender: String?,   // contact name if available
-            val content: String,   // actual message text
-            val raw: String,       // full string for fallback
-            val timestamp: Long = System.currentTimeMillis()
-        )
-        private val recentNotifications = mutableListOf<NotificationItem>()
-        private const val MAX_NOTIFICATIONS = 20
+        // Notification storage is now handled by NotificationStore singleton
         
         // Polling variables
         private var chooserRetryCount = 0
@@ -197,39 +188,17 @@ class JagoAccessibilityService : AccessibilityService() {
 
         fun isServiceRunning(): Boolean = instance != null
 
-        fun readNotifications(): List<NotificationItem> {
-            synchronized(recentNotifications) {
-                if (recentNotifications.isEmpty()) return emptyList()
-                val toRead = recentNotifications.takeLast(5).reversed().toList()
-                recentNotifications.clear()
-                return toRead
-            }
+        fun readNotifications(): List<com.example.jago.logic.NotificationStore.NotificationItem> {
+            return com.example.jago.logic.NotificationStore.getAndClear()
         }
 
         fun hasNotifications(): Boolean {
-            synchronized(recentNotifications) {
-                return recentNotifications.isNotEmpty()
-            }
+            return com.example.jago.logic.NotificationStore.hasAny()
         }
 
-        fun addNotification(item: NotificationItem) {
-            synchronized(recentNotifications) {
-                // Only block exact-same raw text arriving within 2 seconds (rapid re-post)
-                val last = recentNotifications.lastOrNull()
-                val isDuplicate = last != null &&
-                    last.raw == item.raw &&
-                    (item.timestamp - last.timestamp) < 2000
-                
-                if (!isDuplicate) {
-                    recentNotifications.add(item)
-                    if (recentNotifications.size > MAX_NOTIFICATIONS) {
-                        recentNotifications.removeAt(0)
-                    }
-                    Log.d("JagoAccessibility", "Notification stored: ${item.appName} | ${item.sender} | ${item.content}")
-                } else {
-                    Log.d("JagoAccessibility", "Duplicate notification skipped: ${item.raw}")
-                }
-            }
+        // Now delegates to NotificationStore
+        fun addNotification(item: com.example.jago.logic.NotificationStore.NotificationItem) {
+            com.example.jago.logic.NotificationStore.add(item)
         }
 
         fun readScreen(): String {
@@ -571,48 +540,8 @@ class JagoAccessibilityService : AccessibilityService() {
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
 
-        // Capture incoming notifications for "read notifications" feature
-        if (event?.eventType == AccessibilityEvent.TYPE_NOTIFICATION_STATE_CHANGED) {
-            val pkg = event.packageName?.toString() ?: "unknown"
-            val texts = event.text.map { it.toString() }.filter { it.isNotBlank() }
-            if (!texts.isNullOrEmpty() && pkg != "com.example.jago") {
-                val appName = try {
-                    instance?.packageManager
-                        ?.getApplicationLabel(
-                            instance!!.packageManager.getApplicationInfo(pkg, 0)
-                        )?.toString() ?: pkg
-                } catch (e: Exception) { pkg }
-
-                // Try to split sender from content
-                // WhatsApp format: ["Mummy: Main aa rahi hoon"]
-                // or ["Mummy", "Main aa rahi hoon"]
-                val fullText = texts.joinToString(" ")
-                val sender: String?
-                val content: String
-
-                if (texts.size >= 2) {
-                    sender = texts[0]
-                    content = texts.drop(1).joinToString(" ")
-                } else if (fullText.contains(": ")) {
-                    val parts = fullText.split(": ", limit = 2)
-                    sender = parts[0]
-                    content = parts[1]
-                } else {
-                    sender = null
-                    content = fullText
-                }
-
-                val item = NotificationItem(
-                    appName = appName,
-                    sender = sender,
-                    content = content,
-                    raw = fullText
-                )
-
-                addNotification(item)
-                Log.d("JagoAccessibility", "Notification: app=$appName sender=$sender content=$content")
-            }
-        }
+        // NOTE: Notification capture is now handled entirely by JagoNotificationListener
+        // via NotificationStore singleton. TYPE_NOTIFICATION_STATE_CHANGED removed.
 
         // Global Window State Monitoring for TTS Interruption
         if (event?.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
