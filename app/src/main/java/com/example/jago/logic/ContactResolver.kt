@@ -107,24 +107,55 @@ class ContactResolver(private val context: Context) {
             }
         }
 
-        // 4. Fuzzy Match (Fallback - Levenshtein)
-        // Only if target is at least 3 chars to avoid noise
-        if (target.length >= 3) {
-            val fuzzyMatches = contacts.filter { 
-                val dist = FuzzyMatcher.calculateDistance(target, it.name)
-                // Threshold: allow 1 error per 4 characters roughly, or max 2 errors
-                val threshold = (target.length / 4).coerceAtLeast(1).coerceAtMost(2)
-                dist <= threshold
+        // 3.5 First Name Contains Match
+        // "hemesh" should match contact "Hemesh Sharma" even if contains fails
+        val firstNameMatches = contacts.filter { contact ->
+            val firstName = contact.name.lowercase().split(" ").firstOrNull() ?: ""
+            firstName.isNotEmpty() && firstName.contains(targetLower)
+        }
+        if (firstNameMatches.isNotEmpty()) {
+            if (firstNameMatches.size == 1) {
+                Log.d("ContactResolver", "Stage 3.5 (FirstName Contains): Found -> ${firstNameMatches.first().name}")
+                return ResolutionResult.Success(firstNameMatches.first())
+            } else {
+                Log.d("ContactResolver", "Stage 3.5 (FirstName Contains): Ambiguous")
+                return ResolutionResult.Ambiguous(firstNameMatches)
             }
-            
-            if (fuzzyMatches.isNotEmpty()) {
-                if (fuzzyMatches.size == 1) {
-                    Log.d("ContactResolver", "Stage 4 (Fuzzy): Found 1 match -> ${fuzzyMatches.first().name}")
-                    return ResolutionResult.Success(fuzzyMatches.first())
-                } else {
-                    Log.d("ContactResolver", "Stage 4 (Fuzzy): Found ${fuzzyMatches.size} matches -> Ambiguous")
-                    return ResolutionResult.Ambiguous(fuzzyMatches)
+        }
+
+        // 4. Fuzzy Match — tries full name AND first name separately
+        // Indian users say first name only, so "hemesh" should match "Himesh Sharma"
+        if (target.length >= 3) {
+            val threshold = (target.length / 3).coerceAtLeast(1).coerceAtMost(3)
+
+            val fuzzyMatches = contacts.filter { contact ->
+                // Try full name
+                val fullDist = FuzzyMatcher.calculateDistance(targetLower, contact.name.lowercase())
+                if (fullDist <= threshold) return@filter true
+
+                // Try just first name (before first space)
+                val firstName = contact.name.lowercase().split(" ").firstOrNull() ?: ""
+                if (firstName.length >= 3) {
+                    val firstNameDist = FuzzyMatcher.calculateDistance(targetLower, firstName)
+                    if (firstNameDist <= threshold) return@filter true
                 }
+
+                false
+            }
+
+            if (fuzzyMatches.isNotEmpty()) {
+                // If multiple fuzzy matches, pick the one with smallest distance
+                val best = fuzzyMatches.minByOrNull { contact ->
+                    minOf(
+                        FuzzyMatcher.calculateDistance(targetLower, contact.name.lowercase()),
+                        FuzzyMatcher.calculateDistance(
+                            targetLower,
+                            contact.name.lowercase().split(" ").firstOrNull() ?: contact.name.lowercase()
+                        )
+                    )
+                }!!
+                Log.d("ContactResolver", "Stage 4 (Fuzzy+FirstName): Found -> ${best.name}")
+                return ResolutionResult.Success(best)
             }
         }
 

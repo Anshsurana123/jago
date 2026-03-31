@@ -606,22 +606,20 @@ class WakeWordService : Service() {
         val lower = text.lowercase()
 
         val wantsNext = listOf(
-            "agla", "next", "agla padhao", "aage", "aur", "agli",
+            "agla", "next", "agla padhao", "aage", "agli",
             "next one", "aur padhao", "continue", "aur sunao",
-            "ha", "haan", "yes", "okay", "ok", "theek hai",
-            "suno", "padhao", "batao"
+            "ha", "haan", "yes", "suno", "padhao", "batao"
         ).any { lower.contains(it) }
 
         val wantsReply = listOf(
             "jawab", "reply", "jawab dena", "jawab do",
-            "respond", "answer", "message karo", "bhejo",
-            "send", "likho", "type karo", "respond karo"
+            "respond", "answer", "bhejo", "likho"
         ).any { lower.contains(it) }
 
         val wantsStop = listOf(
-            "band", "stop", "bas", "rukh", "enough",
-            "nahi", "no", "mat padhao",
-            "rehne do", "chodo", "skip"
+            "band karo", "band", "stop", "bas karo", "bas",
+            "rukh ja", "enough", "mat padhao",
+            "rehne do", "chodo", "nahi chahiye"
         ).any { lower.contains(it) }
 
         when {
@@ -637,26 +635,63 @@ class WakeWordService : Service() {
             wantsReply -> {
                 isWaitingForNotificationResponse = false
                 val current = pendingNotifications.getOrNull(currentNotificationIndex)
-                
-                if (current != null && current.sender != null) {
-                    isMidFlow = true
-                    isWaitingForWhatsAppMessage = true
-                    pendingWhatsAppContact = current.sender
-                    speechAdapter?.isFollowUpListening = true
-                    JagoTTS.speakBilingualWithCallback(
-                        "What should I say to ${current.sender}?",
-                        "${current.sender} ko kya jawab dun?"
-                    ) {
-                        startListening()
+
+                if (current?.sender != null) {
+                    // Check if user already said the message in the same breath
+                    // e.g. "reply main aa raha hoon" or "jawab main aa raha hoon"
+                    var inlineMessage = lower
+                    listOf("jawab", "reply", "jawab dena", "jawab do",
+                        "respond", "answer", "bhejo", "likho").forEach { word ->
+                        inlineMessage = inlineMessage.replace(word, "").trim()
+                    }
+                    inlineMessage = inlineMessage.trim()
+
+                    if (inlineMessage.isNotEmpty() && inlineMessage.length > 2) {
+                        // User said message inline — send directly without asking
+                        Log.d("WakeWordService", "Inline reply detected: $inlineMessage")
+                        isMidFlow = false
+                        speechAdapter?.isFollowUpListening = false
+                        val finalCommand = com.example.jago.logic.Command(
+                            type = com.example.jago.logic.CommandType.SEND_WHATSAPP_MESSAGE,
+                            contactName = current.sender,
+                            messageBody = inlineMessage
+                        )
+                        JagoTTS.speakBilingual(
+                            "Sending to ${current.sender}",
+                            "${current.sender} ko bhej raha hoon"
+                        )
+                        actionExecutor?.execute(finalCommand)
+                        hideOverlayWithDelay()
+                    } else {
+                        // No inline message — ask what to say
+                        isMidFlow = true
+                        isWaitingForWhatsAppMessage = true
+                        pendingWhatsAppContact = current.sender
+                        speechAdapter?.isFollowUpListening = true
+                        JagoTTS.speakBilingualWithCallback(
+                            "What should I say to ${current.sender}?",
+                            "${current.sender} ko kya jawab dun?"
+                        ) {
+                            startListening()
+                        }
                     }
                 } else {
+                    // No sender — open the app so user can reply manually
                     isMidFlow = false
                     speechAdapter?.isFollowUpListening = false
-                    val target = current?.appName ?: "them"
+                    val appName = current?.appName ?: "the app"
                     JagoTTS.speakBilingual(
-                        "I cannot reply to $target directly from here.", 
-                        "Main yahan se sidhe $target ko jawab nahi de sakta."
+                        "Opening $appName for you to reply.",
+                        "$appName khol raha hoon jawab dene ke liye."
                     )
+                    current?.appName?.let { app ->
+                        actionExecutor?.execute(
+                            com.example.jago.logic.Command(
+                                com.example.jago.logic.CommandType.OPEN_APP,
+                                contactName = app
+                            )
+                        )
+                    }
                     hideOverlayWithDelay()
                 }
             }
@@ -678,9 +713,10 @@ class WakeWordService : Service() {
                 }
             }
             else -> {
+                // Didn't understand — ask again
                 JagoTTS.speakBilingualWithCallback(
                     "Say 'next' for next, 'reply' to reply, or 'stop' to stop.",
-                    "Agla sunne ke liye 'agla' bolo, jawab dene ke liye 'jawab', band karne ke liye 'band'."
+                    "Agla sunne ke liye 'agla' bolo, jawab ke liye 'jawab', band ke liye 'band'."
                 ) {
                     speechAdapter?.isFollowUpListening = true
                     startListening()
@@ -715,6 +751,7 @@ class WakeWordService : Service() {
         isMidFlow = true
         val remaining = pendingNotifications.size - currentNotificationIndex - 1
 
+        // Build summary separately from content
         val summary = if (item.sender != null) {
             if (JagoTTS.currentLanguage == "hi")
                 "${item.appName} par ${item.sender} ka message"
@@ -724,22 +761,27 @@ class WakeWordService : Service() {
             item.appName
         }
 
-        JagoTTS.speakWithCallback("$summary. ${item.content}") {
-            val followUp = if (remaining > 0) {
-                if (JagoTTS.currentLanguage == "hi")
-                    "$remaining aur hain. Agla padho ki jawab dena hai? Band karne ke liye 'band' bolo."
-                else
-                    "$remaining more. Say 'next' for next, 'reply' to reply, or 'stop' to stop."
-            } else {
-                if (JagoTTS.currentLanguage == "hi")
-                    "Yahi tha. Jawab dena hai?"
-                else
-                    "That's all. Say 'reply' to reply or 'stop' to stop."
-            }
-            JagoTTS.speakWithCallback(followUp) {
-                isWaitingForNotificationResponse = true
-                speechAdapter?.isFollowUpListening = true
-                startListening()
+        val followUp = if (remaining > 0) {
+            if (JagoTTS.currentLanguage == "hi")
+                "$remaining aur hain. Agla padho ki jawab dena hai? Band karne ke liye 'band' bolo."
+            else
+                "$remaining more. Say 'next' for next, 'reply' to reply, or 'stop' to stop."
+        } else {
+            if (JagoTTS.currentLanguage == "hi")
+                "Yahi tha. Jawab dena hai? Ya band karo."
+            else
+                "That's all. Say 'reply' to reply or 'stop' to stop."
+        }
+
+        // Chain: speak summary → speak content → speak followUp → listen
+        // Each step waits for previous to fully complete
+        JagoTTS.speakWithCallback(summary) {
+            JagoTTS.speakWithCallback(item.content) {
+                JagoTTS.speakWithCallback(followUp) {
+                    isWaitingForNotificationResponse = true
+                    speechAdapter?.isFollowUpListening = true
+                    startListening()
+                }
             }
         }
     }
