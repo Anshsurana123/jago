@@ -397,7 +397,14 @@ class CommandParser {
             "BLUETOOTH" -> Command(CommandType.OPEN_BLUETOOTH_SETTINGS)
             
             "CALL" -> {
-                val payload = cleanText.removePrefix(matchedSeed ?: "").replace(":", "").trim()
+                // Remove ALL call-related words from anywhere in the string
+                // not just prefix — handles "mummy call", "call mummy", "dial mummy" etc
+                var payload = cleanText
+                val callWords = listOf("call", "dial", "ring", "phone")
+                callWords.forEach { word ->
+                    payload = payload.replace(Regex("\\b$word\\b"), "").trim()
+                }
+                payload = payload.replace(Regex("\\s+"), " ").trim()
                 if (payload.isNotEmpty()) Command(CommandType.CALL, contactName = payload)
                 else Command(CommandType.UNKNOWN)
             }

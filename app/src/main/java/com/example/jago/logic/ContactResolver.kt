@@ -64,22 +64,12 @@ class ContactResolver(private val context: Context) {
         return uniqueContacts.values.toList()
     }
 
-    private val aliases = mapOf(
-        "mum" to "mummy",
-        "mom" to "mummy",
-        "maa" to "mummy"
-    )
+
 
     private fun findBestMatch(target: String, contacts: List<Contact>): ResolutionResult {
         val normalizedTarget = target.lowercase().trim()
-        val expandedTarget = aliases[normalizedTarget] ?: normalizedTarget
-        
-        if (expandedTarget != normalizedTarget) {
-            Log.d("ContactResolver", "Alias expansion: '$normalizedTarget' -> '$expandedTarget'")
-        }
-        
-        val targetLower = expandedTarget.lowercase()
-        Log.d("ContactResolver", "Resolving contact for: $expandedTarget (originally: $target)")
+        val targetLower = normalizedTarget
+        Log.d("ContactResolver", "Resolving contact for: $targetLower (originally: $target)")
 
         // 1. Exact Match (Highest Priority)
         val exactMatches = contacts.filter { it.name.lowercase() == targetLower }
