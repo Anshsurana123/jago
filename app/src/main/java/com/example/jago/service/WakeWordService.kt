@@ -162,39 +162,38 @@ class WakeWordService : Service() {
                 // STEP A — convert raw PCM to float [-1, 1]
                 val floatChunk = FloatArray(CHUNK_SIZE) { chunkBuffer[it] / 32768f }
 
-                // STEP B — melspectrogram via ONNX
-                val env = ortEnv
+                // STEP B — melspectrogram via ONNX (properly isolated try/finally)
+                val melArray: List<FloatArray>?
                 val inputTensor = ai.onnxruntime.OnnxTensor.createTensor(
-                    env,
+                    ortEnv,
                     java.nio.FloatBuffer.wrap(floatChunk),
                     longArrayOf(1, 1280)
                 )
                 try {
                     val melResults = melSession?.run(mapOf("input" to inputTensor))
-                    val melArray = (melResults?.get(0)?.value as? Array<*>)
+                    melArray = (melResults?.get(0)?.value as? Array<*>)
                         ?.let { it[0] as? Array<*> }
                         ?.let { it[0] as? Array<*> }
                         ?.map { (it as FloatArray) }
-                    
                     melResults?.close()
-                    
-                    if (melArray == null) continue
+                } catch (e: Exception) {
+                    Log.e("Jago", "Mel model error: ${e.message}")
+                    inputTensor.close()
+                    continue
+                }
+                inputTensor.close() // always close after try block
 
-                // STEP C — normalize and push frames
+                if (melArray == null) continue
+
+                // STEP C — normalize and push mel frames into rolling buffer
                 for (melFrame in melArray) {
                     val normalized = FloatArray(melFrame.size) { i -> (melFrame[i] / 10f) + 2f }
                     melFrameBuffer.addLast(normalized)
                 }
-                while (melFrameBuffer.size > MEL_FRAMES_NEEDED) {
-                    melFrameBuffer.removeFirst()
-                }
-
-                // Need 76 mel frames before we can run embedding model
+                while (melFrameBuffer.size > MEL_FRAMES_NEEDED) melFrameBuffer.removeFirst()
                 if (melFrameBuffer.size < MEL_FRAMES_NEEDED) continue
 
                 // STEP D — embedding model
-                // Input:  [1, 76, 32, 1]
-                // Output: [1, 1, 1, 96] — single 96-dim embedding vector
                 val embInput = Array(1) {
                     Array(MEL_FRAMES_NEEDED) { frameIdx ->
                         Array(32) { binIdx ->
@@ -212,16 +211,10 @@ class WakeWordService : Service() {
 
                 // STEP E — push embedding into rolling buffer
                 embeddingBuffer.addLast(embOutput[0][0][0])
-                while (embeddingBuffer.size > EMBEDDING_FRAMES_NEEDED) {
-                    embeddingBuffer.removeFirst()
-                }
-
-                // Need 16 embeddings before we can score wake word
+                while (embeddingBuffer.size > EMBEDDING_FRAMES_NEEDED) embeddingBuffer.removeFirst()
                 if (embeddingBuffer.size < EMBEDDING_FRAMES_NEEDED) continue
 
                 // STEP F — wake word model
-                // Input:  [1, 16, 96]
-                // Output: [1, 1] — score 0.0 to 1.0
                 val wwInput = Array(1) {
                     Array(EMBEDDING_FRAMES_NEEDED) { i -> embeddingBuffer[i] }
                 }
@@ -243,9 +236,6 @@ class WakeWordService : Service() {
                     melFrameBuffer.clear()
                     embeddingBuffer.clear()
                     Handler(Looper.getMainLooper()).post { showOverlay() }
-                }
-                } finally {
-                    inputTensor.close()
                 }
             }
 

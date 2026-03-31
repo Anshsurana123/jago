@@ -83,6 +83,11 @@ class MainActivity : AppCompatActivity() {
         checkPermissions()
         JagoTTS.init(this)
 
+        // Check if notification listener permission is granted
+        if (!isNotificationListenerEnabled()) {
+            startActivity(Intent("android.settings.ACTION_NOTIFICATION_LISTENER_SETTINGS"))
+        }
+
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
                 JagoTTS.stopSpeaking()
@@ -189,6 +194,14 @@ class MainActivity : AppCompatActivity() {
         } else {
             Toast.makeText(this, "Device Admin is already active", Toast.LENGTH_SHORT).show()
         }
+    }
+
+    private fun isNotificationListenerEnabled(): Boolean {
+        val flat = android.provider.Settings.Secure.getString(
+            contentResolver,
+            "enabled_notification_listeners"
+        )
+        return flat != null && flat.contains(packageName)
     }
 
     private fun updateUI(isRunning: Boolean) {

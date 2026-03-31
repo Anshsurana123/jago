@@ -211,56 +211,86 @@ class JagoAccessibilityService : AccessibilityService() {
             }
         }
 
+        fun addNotification(item: NotificationItem) {
+            synchronized(recentNotifications) {
+                if (recentNotifications.lastOrNull()?.raw != item.raw) {
+                    recentNotifications.add(item)
+                    if (recentNotifications.size > MAX_NOTIFICATIONS) {
+                        recentNotifications.removeAt(0)
+                    }
+                }
+            }
+        }
+
         fun readScreen(): String {
             val root = instance?.rootInActiveWindow
-                ?: return "Cannot read screen right now"
-        
-            val texts = mutableListOf<String>()
-            
-            val displayMetrics = instance?.resources?.displayMetrics
-            val screenRect = if (displayMetrics != null) {
-                android.graphics.Rect(0, 0, displayMetrics.widthPixels, displayMetrics.heightPixels)
-            } else {
-                android.graphics.Rect(0, 0, Int.MAX_VALUE, Int.MAX_VALUE) // Fallback if unavailable
+                ?: return "I cannot read the screen right now. Make sure accessibility is enabled."
+
+            // Get the app name currently on screen
+            val appName = root.packageName?.toString()?.let { pkg ->
+                try {
+                    instance!!.packageManager.getApplicationLabel(
+                        instance!!.packageManager.getApplicationInfo(pkg, 0)
+                    ).toString()
+                } catch (e: Exception) { null }
             }
 
-            collectVisibleText(root, texts, screenRect)
-        
-            if (texts.isEmpty()) return "Nothing to read on screen"
-        
-            // Join with pause between items for natural TTS flow
-            val result = texts.distinct().joinToString(". ")
-            Log.d("JagoAccessibility", "Screen text collected: ${texts.size} items")
+            val texts = mutableListOf<String>()
+            collectVisibleText(root, texts, depth = 0)
+
+            if (texts.isEmpty()) return "Nothing readable on screen."
+
+            // Smart deduplication — remove substrings that are already part of longer strings
+            val deduped = texts.filter { candidate ->
+                texts.none { other -> other != candidate && other.contains(candidate) }
+            }.distinct()
+
+            val prefix = if (appName != null) "On $appName. " else ""
+            val result = prefix + deduped.joinToString(". ")
+
+            Log.d("JagoAccessibility", "Screen read: ${deduped.size} items")
             return result
         }
-        
+
         private fun collectVisibleText(
             node: AccessibilityNodeInfo?,
             texts: MutableList<String>,
-            screenRect: android.graphics.Rect
+            depth: Int
         ) {
-            if (node == null) return
-        
-            val nodeBounds = android.graphics.Rect()
-            node.getBoundsInScreen(nodeBounds)
+            if (node == null || depth > 15) return // limit recursion depth
 
-            // Only collect visible nodes that are actually drawn on the specific physical screen area
-            if (node.isVisibleToUser && android.graphics.Rect.intersects(nodeBounds, screenRect) && !nodeBounds.isEmpty) {
+            if (node.isVisibleToUser) {
                 val text = node.text?.toString()?.trim()
                 val desc = node.contentDescription?.toString()?.trim()
-        
-                // Add text if it exists and isn't just whitespace or a single char
-                if (!text.isNullOrEmpty() && text.length > 1) {
-                    texts.add(text)
-                } else if (!desc.isNullOrEmpty() && desc.length > 1 && text.isNullOrEmpty()) {
-                    // Use content description as fallback (important for icons/buttons)
-                    texts.add(desc)
+
+                // Skip very short strings, numbers alone, and common UI noise
+                val noiseWords = setOf(
+                    "ok", "cancel", "back", "menu", "more", "close", "done",
+                    "next", "skip", "yes", "no", "send", "edit", "copy",
+                    "share", "delete", "search", "home", "settings"
+                )
+
+                val candidate = when {
+                    !text.isNullOrEmpty() && text.length > 2 -> text
+                    !desc.isNullOrEmpty() && desc.length > 2 && text.isNullOrEmpty() -> desc
+                    else -> null
+                }
+
+                if (candidate != null) {
+                    val lower = candidate.lowercase()
+                    // Skip pure noise, pure numbers under 4 digits, and duplicates
+                    val isPureNumber = candidate.all { it.isDigit() } && candidate.length < 4
+                    val isNoise = noiseWords.contains(lower)
+                    val isDuplicate = texts.any { it.equals(candidate, ignoreCase = true) }
+
+                    if (!isPureNumber && !isNoise && !isDuplicate) {
+                        texts.add(candidate)
+                    }
                 }
             }
-        
-            // Recurse into children
+
             for (i in 0 until node.childCount) {
-                collectVisibleText(node.getChild(i), texts, screenRect)
+                collectVisibleText(node.getChild(i), texts, depth + 1)
             }
         }
 
