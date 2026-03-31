@@ -467,31 +467,18 @@ class CommandParser {
 
                 if (!splitFound) {
                     val words = content.split(" ")
-                    if (words.size >= 3) {
-                        // Try two-word contact name first (e.g. "Ram Prasad hello")
-                        val twoWordContact = "${words[0]} ${words[1]}"
-                        val remainingAfterTwo = words.drop(2).joinToString(" ")
-                        
-                        // Heuristic: if third word onwards looks like a message (common message starters)
-                        // OR if two-word contact is more than 6 chars total (likely a real name)
-                        val messageStarters = listOf("main", "mai", "mein", "i ", "aaj", "kal", "bhai",
-                            "yaar", "hello", "hi", "hey", "please", "pls", "kya", "ab", "abhi")
-                        val looksLikeMessage = messageStarters.any { remainingAfterTwo.startsWith(it) }
-                        
-                        if (looksLikeMessage || twoWordContact.length > 6) {
-                            contactName = twoWordContact.replace(":", "").trim()
-                            messageBody = remainingAfterTwo.trim()
-                        } else {
-                            // Fall back to single word contact
+                    // Always use the first word as the contact name.
+                    // ContactResolver handles partial names — "Ram" will StartsWith-match "Ram Prasad".
+                    // Doing two-word contact guessing here causes body words to be silently swallowed.
+                    when {
+                        words.size >= 2 -> {
                             contactName = words[0].replace(":", "").trim()
                             messageBody = words.drop(1).joinToString(" ").trim()
                         }
-                    } else if (words.size == 2) {
-                        contactName = words[0].replace(":", "").trim()
-                        messageBody = words[1].trim()
-                    } else if (words.size == 1) {
-                        contactName = words[0].replace(":", "").trim()
-                        messageBody = ""
+                        words.size == 1 -> {
+                            contactName = words[0].replace(":", "").trim()
+                            messageBody = ""
+                        }
                     }
                 }
                 
