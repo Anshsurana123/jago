@@ -68,8 +68,9 @@ object JagoTTS : TextToSpeech.OnInitListener {
                         // Post delayed callback to ensure TTS audio clears (500ms buffer)
                         handler.postDelayed({
                             Log.d(TAG, "TTS finished → Starting follow-up")
-                            pendingCallback?.invoke()
+                            val cb = pendingCallback
                             pendingCallback = null
+                            cb?.invoke()
                         }, 500)
                     }
                 }

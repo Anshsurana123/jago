@@ -74,6 +74,10 @@ class WakeWordService : Service() {
     private var pendingNotifications = listOf<com.example.jago.service.JagoAccessibilityService.Companion.NotificationItem>()
     private var currentNotificationIndex = 0
     private var isWaitingForNotificationResponse = false
+    
+    // Memory for WhatsApp direct reply
+    private var isWaitingForWhatsAppMessage = false
+    private var pendingWhatsAppContact: String? = null
 
     // True when Jago is mid-flow and should not auto-close on TTS end
     @Volatile private var isMidFlow = false
@@ -311,6 +315,10 @@ class WakeWordService : Service() {
         // Handle notification follow-up response
         if (isWaitingForNotificationResponse) {
             handleNotificationFollowUp(translatedText)
+            return
+        }
+        if (isWaitingForWhatsAppMessage) {
+            handleWhatsAppMessageFollowUp(text) // use exact spoken wording
             return
         }
 
@@ -628,23 +636,29 @@ class WakeWordService : Service() {
             }
             wantsReply -> {
                 isWaitingForNotificationResponse = false
-                isMidFlow = false
-                speechAdapter?.isFollowUpListening = false
                 val current = pendingNotifications.getOrNull(currentNotificationIndex)
-                if (current != null) {
-                    JagoTTS.speakBilingual(
-                        "Opening reply to ${current.sender ?: current.appName}",
-                        "${current.sender ?: current.appName} ko jawab de raha hoon"
-                    )
-                    if (current.sender != null) {
-                        actionExecutor?.execute(
-                            com.example.jago.logic.Command(
-                                com.example.jago.logic.CommandType.OPEN_WHATSAPP
-                            )
-                        )
+                
+                if (current != null && current.sender != null) {
+                    isMidFlow = true
+                    isWaitingForWhatsAppMessage = true
+                    pendingWhatsAppContact = current.sender
+                    speechAdapter?.isFollowUpListening = true
+                    JagoTTS.speakBilingualWithCallback(
+                        "What should I say to ${current.sender}?",
+                        "${current.sender} ko kya jawab dun?"
+                    ) {
+                        startListening()
                     }
+                } else {
+                    isMidFlow = false
+                    speechAdapter?.isFollowUpListening = false
+                    val target = current?.appName ?: "them"
+                    JagoTTS.speakBilingual(
+                        "I cannot reply to $target directly from here.", 
+                        "Main yahan se sidhe $target ko jawab nahi de sakta."
+                    )
+                    hideOverlayWithDelay()
                 }
-                hideOverlayWithDelay()
             }
             wantsNext -> {
                 currentNotificationIndex++
@@ -672,6 +686,26 @@ class WakeWordService : Service() {
                     startListening()
                 }
             }
+        }
+    }
+
+    private fun handleWhatsAppMessageFollowUp(text: String) {
+        val contact = pendingWhatsAppContact
+        isWaitingForWhatsAppMessage = false
+        pendingWhatsAppContact = null
+        isMidFlow = false
+        speechAdapter?.isFollowUpListening = false
+        
+        if (contact != null) {
+            val msgBody = text.trim()
+            val finalCommand = com.example.jago.logic.Command(
+                type = com.example.jago.logic.CommandType.SEND_WHATSAPP_MESSAGE,
+                contactName = contact,
+                messageBody = msgBody
+            )
+            actionExecutor?.execute(finalCommand)
+        } else {
+            hideOverlayWithDelay()
         }
     }
 

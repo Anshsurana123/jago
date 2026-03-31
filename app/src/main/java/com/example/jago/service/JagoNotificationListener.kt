@@ -20,6 +20,12 @@ class JagoNotificationListener : NotificationListenerService() {
             if (skipPackages.any { pkg.startsWith(it) }) return
 
             val extras = sbn.notification?.extras ?: return
+
+            // Skip group summaries (e.g. '2 messages from 2 chats')
+            if ((sbn.notification.flags and android.app.Notification.FLAG_GROUP_SUMMARY) != 0) {
+                return
+            }
+
             val title = extras.getString("android.title") ?: ""
             val text = extras.getCharSequence("android.text")?.toString() ?: ""
             val bigText = extras.getCharSequence("android.bigText")?.toString() ?: ""

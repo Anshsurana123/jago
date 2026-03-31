@@ -22,10 +22,10 @@ class AndroidSTTAdapter(private val context: Context) : SpeechAdapter {
         
         Log.d("AndroidSTT", "Starting listening (follow-up: $isFollowUpListening)...")
         
-        // Always destroy previous instance to avoid state lock, UNLESS it's a follow-up
-        if (!isFollowUpListening) {
-            destroy()
-        }
+        // Always destroy previous instance to avoid state lock
+        // For follow-ups, we still need to clean up the old recognizer
+        // but we do it forcefully (bypassing the isFollowUpListening guard)
+        forceDestroyRecognizer()
         
         if (SpeechRecognizer.isRecognitionAvailable(context)) {
             try {
@@ -76,7 +76,11 @@ class AndroidSTTAdapter(private val context: Context) : SpeechAdapter {
             Log.d("AndroidSTT", "destroy skipped: isFollowUpListening is true")
             return
         }
-        Log.d("AndroidSTT", "Destroying SpeechRecognizer")
+        forceDestroyRecognizer()
+    }
+
+    private fun forceDestroyRecognizer() {
+        Log.d("AndroidSTT", "Force destroying SpeechRecognizer")
         try {
             speechRecognizer?.destroy()
         } catch (e: Exception) {
@@ -124,7 +128,7 @@ class AndroidSTTAdapter(private val context: Context) : SpeechAdapter {
             retryCount = 0
             // Important: Notify callback so service can resume wake word
             callback?.onError("Speech Error: $errorMessage")
-            destroy() // Safely clean up
+            forceDestroyRecognizer() // Safely clean up (bypass follow-up guard)
         }
 
         override fun onResults(results: Bundle?) {
@@ -139,7 +143,7 @@ class AndroidSTTAdapter(private val context: Context) : SpeechAdapter {
             } else {
                 callback?.onError("No speech detected")
             }
-            destroy() // Cleanup after success
+            forceDestroyRecognizer() // Cleanup after success (bypass follow-up guard)
         }
 
         override fun onPartialResults(partialResults: Bundle?) {

@@ -22,7 +22,8 @@ class JagoAccessibilityService : AccessibilityService() {
             val appName: String,
             val sender: String?,   // contact name if available
             val content: String,   // actual message text
-            val raw: String        // full string for fallback
+            val raw: String,       // full string for fallback
+            val timestamp: Long = System.currentTimeMillis()
         )
         private val recentNotifications = mutableListOf<NotificationItem>()
         private const val MAX_NOTIFICATIONS = 20
@@ -213,11 +214,20 @@ class JagoAccessibilityService : AccessibilityService() {
 
         fun addNotification(item: NotificationItem) {
             synchronized(recentNotifications) {
-                if (recentNotifications.lastOrNull()?.raw != item.raw) {
+                // Only block exact-same raw text arriving within 2 seconds (rapid re-post)
+                val last = recentNotifications.lastOrNull()
+                val isDuplicate = last != null &&
+                    last.raw == item.raw &&
+                    (item.timestamp - last.timestamp) < 2000
+                
+                if (!isDuplicate) {
                     recentNotifications.add(item)
                     if (recentNotifications.size > MAX_NOTIFICATIONS) {
                         recentNotifications.removeAt(0)
                     }
+                    Log.d("JagoAccessibility", "Notification stored: ${item.appName} | ${item.sender} | ${item.content}")
+                } else {
+                    Log.d("JagoAccessibility", "Duplicate notification skipped: ${item.raw}")
                 }
             }
         }
@@ -599,14 +609,7 @@ class JagoAccessibilityService : AccessibilityService() {
                     raw = fullText
                 )
 
-                synchronized(recentNotifications) {
-                    if (recentNotifications.lastOrNull()?.raw != fullText) {
-                        recentNotifications.add(item)
-                        if (recentNotifications.size > MAX_NOTIFICATIONS) {
-                            recentNotifications.removeAt(0)
-                        }
-                    }
-                }
+                addNotification(item)
                 Log.d("JagoAccessibility", "Notification: app=$appName sender=$sender content=$content")
             }
         }
