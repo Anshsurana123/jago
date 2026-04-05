@@ -143,6 +143,7 @@ class CommandParser {
         "reduce brightness" to CommandType.BRIGHTNESS_DECREASE,
         "too dark" to CommandType.BRIGHTNESS_INCREASE,
         "can't see" to CommandType.BRIGHTNESS_INCREASE,
+        "i can't see" to CommandType.BRIGHTNESS_INCREASE,
         "increase brightness" to CommandType.BRIGHTNESS_INCREASE,
         "screen is dark" to CommandType.BRIGHTNESS_INCREASE,
         "screen dark" to CommandType.BRIGHTNESS_INCREASE,

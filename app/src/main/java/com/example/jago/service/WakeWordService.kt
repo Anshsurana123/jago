@@ -38,7 +38,7 @@ class WakeWordService : Service() {
     private var melSession: OrtSession? = null
     private var embeddingModel: Interpreter? = null
     private var wakeWordModel: Interpreter? = null
-    private val ortEnv: OrtEnvironment = OrtEnvironment.getEnvironment() // created once, not per-frame
+    private val ortEnv: OrtEnvironment by lazy { OrtEnvironment.getEnvironment() }
 
     // Pipeline state
     @Volatile private var isDetecting = false
@@ -88,6 +88,7 @@ class WakeWordService : Service() {
         startForeground(1, createNotification())
         
         actionExecutor = ActionExecutor(this)
+        com.example.jago.logic.NotificationStore.init(this)
         speechAdapter = AndroidSTTAdapter(this)
         
         JagoTTS.onSpeechStateChange = { isSpeaking ->
@@ -404,8 +405,7 @@ class WakeWordService : Service() {
                 CommandType.SET_ALARM_CUSTOM, CommandType.SET_ALARM -> handleNewAlarmCommand(command)
                 CommandType.SCHEDULED_ACTION -> handleScheduledCommand(command)
                 CommandType.READ_NOTIFICATIONS -> {
-                    val notifications = com.example.jago.service.JagoAccessibilityService
-                        .readNotifications()
+                    val notifications = com.example.jago.logic.NotificationStore.getAndClear(this)
                     if (notifications.isEmpty()) {
                         JagoTTS.speakBilingual(
                             "No new notifications.",
@@ -608,7 +608,7 @@ class WakeWordService : Service() {
         val wantsNext = listOf(
             "agla", "next", "agla padhao", "aage", "agli",
             "next one", "aur padhao", "continue", "aur sunao",
-            "ha", "haan", "yes", "suno", "padhao", "batao"
+            "haan", "yes", "suno", "padhao", "batao"
         ).any { lower.contains(it) }
 
         val wantsReply = listOf(
@@ -729,19 +729,67 @@ class WakeWordService : Service() {
         val contact = pendingWhatsAppContact
         isWaitingForWhatsAppMessage = false
         pendingWhatsAppContact = null
-        isMidFlow = false
         speechAdapter?.isFollowUpListening = false
-        
-        if (contact != null) {
-            val msgBody = text.trim()
+
+        if (contact == null) {
+            isMidFlow = false
+            hideOverlayWithDelay()
+            return
+        }
+
+        val msgBody = text.trim()
+
+        // Detect if user specified language in the reply itself
+        val lowerMsg = msgBody.lowercase()
+        val wantsHindi = listOf("in hindi", "hindi mein", "hindi mai", "hindi me")
+            .any { lowerMsg.contains(it) }
+        val wantsEnglish = listOf("in english", "english mein", "english mai")
+            .any { lowerMsg.contains(it) }
+
+        // Strip language trigger from body
+        var cleanBody = msgBody
+        if (wantsHindi) {
+            listOf("in hindi", "hindi mein", "hindi mai", "hindi me")
+                .forEach { cleanBody = cleanBody.replace(it, "", ignoreCase = true).trim() }
+        } else if (wantsEnglish) {
+            listOf("in english", "english mein", "english mai")
+                .forEach { cleanBody = cleanBody.replace(it, "", ignoreCase = true).trim() }
+        }
+
+        // Determine if translation needed:
+        // Either user explicitly said "in hindi" OR global language is set to Hindi
+        val shouldTranslateToHindi = wantsHindi ||
+            (!wantsEnglish && JagoTTS.currentLanguage == "hi")
+        val shouldTranslateToEnglish = wantsEnglish
+
+        if (shouldTranslateToHindi || shouldTranslateToEnglish) {
+            // Translate async then send
+            serviceScope.launch {
+                JagoTTS.speakBilingual("Translating...", "Translate kar raha hoon...")
+                val translatedBody = if (shouldTranslateToHindi) {
+                    TranslationClient.toDevanagari(cleanBody)
+                } else {
+                    TranslationClient.toEnglish(cleanBody)
+                }
+                val finalBody = translatedBody ?: cleanBody // fallback to original
+                val finalCommand = com.example.jago.logic.Command(
+                    type = com.example.jago.logic.CommandType.SEND_WHATSAPP_MESSAGE,
+                    contactName = contact,
+                    messageBody = finalBody
+                )
+                isMidFlow = false
+                actionExecutor?.execute(finalCommand)
+                hideOverlayWithDelay()
+            }
+        } else {
+            // No translation needed — send as-is
+            isMidFlow = false
             val finalCommand = com.example.jago.logic.Command(
                 type = com.example.jago.logic.CommandType.SEND_WHATSAPP_MESSAGE,
                 contactName = contact,
-                messageBody = msgBody
+                messageBody = cleanBody
             )
             actionExecutor?.execute(finalCommand)
-        } else {
-            hideOverlayWithDelay()
         }
     }
 
@@ -781,6 +829,20 @@ class WakeWordService : Service() {
                     isWaitingForNotificationResponse = true
                     speechAdapter?.isFollowUpListening = true
                     startListening()
+
+                    // Auto-reset after 30 seconds if user doesn't respond
+                    // Prevents state getting permanently stuck
+                    serviceScope.launch {
+                        delay(30000)
+                        if (isWaitingForNotificationResponse) {
+                            Log.w("Jago", "Notification follow-up timed out — resetting state")
+                            isWaitingForNotificationResponse = false
+                            isMidFlow = false
+                            speechAdapter?.isFollowUpListening = false
+                            pendingNotifications = emptyList()
+                            currentNotificationIndex = 0
+                        }
+                    }
                 }
             }
         }
@@ -837,8 +899,16 @@ class WakeWordService : Service() {
                     isDetecting = true
                     Log.d("Jago", "Wake word detection resumed")
                 } else {
-                    // AudioRecord is in bad state, restart the whole capture
-                    Log.w("Jago", "AudioRecord in bad state, restarting capture")
+                    // AudioRecord is in bad state — stop old thread first,
+                    // then restart cleanly to avoid double-thread bug
+                    Log.w("Jago", "AudioRecord in bad state, restarting capture cleanly")
+                    isDetecting = false
+                    audioThread?.interrupt()
+                    audioThread?.join(500) // wait max 500ms for old thread to die
+                    audioThread = null
+                    audioRecord?.stop()
+                    audioRecord?.release()
+                    audioRecord = null
                     startAudioCapture()
                     isDetecting = true
                 }

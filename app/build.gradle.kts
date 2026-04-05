@@ -13,6 +13,7 @@ if (localPropertiesFile.exists()) {
     localProperties.load(FileInputStream(localPropertiesFile))
 }
 val geminiApiKey = localProperties.getProperty("GEMINI_API_KEY") ?: ""
+val cerebrasApiKey = localProperties.getProperty("CEREBRAS_API_KEY") ?: ""
 
 android {
     namespace = "com.example.jago"
@@ -32,6 +33,7 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         
         buildConfigField("String", "GEMINI_API_KEY", "\"$geminiApiKey\"")
+        buildConfigField("String", "CEREBRAS_API_KEY", "\"$cerebrasApiKey\"")
     }
 
     buildTypes {

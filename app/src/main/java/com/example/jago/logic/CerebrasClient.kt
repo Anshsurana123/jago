@@ -12,7 +12,8 @@ import java.net.URL
 
 object CerebrasClient {
     private const val TAG = "CerebrasClient"
-    private const val API_KEY = "csk-vtprwjpk3ehprrcmexxtmtcwk2pt5e2f5mvy4h9944ntj35x"
+    private val API_KEY: String
+        get() = com.example.jago.BuildConfig.CEREBRAS_API_KEY
     private const val ENDPOINT = "https://api.cerebras.ai/v1/chat/completions"
     private const val MODEL = "llama3.1-8b"
 

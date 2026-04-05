@@ -2,6 +2,8 @@ package com.example.jago.logic
 
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import java.net.HttpURLConnection
@@ -20,28 +22,31 @@ object TranslationClient {
             val words = text.trim().split("\\s+".toRegex()).filter { it.isNotEmpty() }
             if (words.isEmpty()) return@withContext null
 
+            // Fire ALL word requests in parallel — much faster than sequential
             val devanagariWords = words.map { word ->
-                try {
-                    val encoded = URLEncoder.encode(word, "UTF-8")
-                    val url = "$INPUT_TOOLS_URL&text=$encoded"
-                    val conn = (URL(url).openConnection() as HttpURLConnection).apply {
-                        requestMethod = "GET"
-                        setRequestProperty("User-Agent", "Mozilla/5.0")
-                        connectTimeout = 3000
-                        readTimeout = 3000
-                    }
-                    if (conn.responseCode == HttpURLConnection.HTTP_OK) {
-                        val resp = conn.inputStream.bufferedReader().readText()
-                        val arr = JSONArray(resp)
-                        if (arr.getString(0) == "SUCCESS") {
-                            arr.getJSONArray(1).getJSONArray(0).getJSONArray(1).getString(0)
+                async {
+                    try {
+                        val encoded = URLEncoder.encode(word, "UTF-8")
+                        val url = "$INPUT_TOOLS_URL&text=$encoded"
+                        val conn = (URL(url).openConnection() as HttpURLConnection).apply {
+                            requestMethod = "GET"
+                            setRequestProperty("User-Agent", "Mozilla/5.0")
+                            connectTimeout = 4000
+                            readTimeout = 4000
+                        }
+                        if (conn.responseCode == HttpURLConnection.HTTP_OK) {
+                            val resp = conn.inputStream.bufferedReader().readText()
+                            val arr = JSONArray(resp)
+                            if (arr.getString(0) == "SUCCESS") {
+                                arr.getJSONArray(1).getJSONArray(0).getJSONArray(1).getString(0)
+                            } else word
                         } else word
-                    } else word
-                } catch (e: Exception) {
-                    Log.e(TAG, "Word transliteration failed for '$word'", e)
-                    word // fallback to original word
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Word transliteration failed for '$word'", e)
+                        word
+                    }
                 }
-            }
+            }.awaitAll() // wait for ALL parallel requests to complete
 
             val result = devanagariWords.joinToString(" ")
             Log.d(TAG, "Transliterated: '$text' → '$result'")

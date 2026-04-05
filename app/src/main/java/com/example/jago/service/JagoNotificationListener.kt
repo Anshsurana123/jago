@@ -72,7 +72,7 @@ class JagoNotificationListener : NotificationListenerService() {
                 raw = "$title $content"
             )
 
-            NotificationStore.add(item)
+            NotificationStore.add(item, applicationContext)
 
         } catch (e: Exception) {
             Log.e("JagoNotification", "Error", e)
