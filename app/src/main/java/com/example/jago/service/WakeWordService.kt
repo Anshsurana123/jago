@@ -35,8 +35,8 @@ class WakeWordService : Service() {
 
     // 3-model openWakeWord pipeline
     private var melSession: OrtSession? = null
-    private var embeddingModel: OrtSession? = null
-    private var wakeWordModel: OrtSession? = null
+    private var embeddingSession: OrtSession? = null
+    private var wakeWordSession: OrtSession? = null
     private val ortEnv: OrtEnvironment by lazy { OrtEnvironment.getEnvironment() }
 
     // Pipeline state
@@ -206,52 +206,52 @@ class WakeWordService : Service() {
                             FloatArray(1) { melFrameBuffer[frameIdx][binIdx] }
                         }
                     }
-               val embFlat = FloatArray(1 * 76 * 32) { i ->
-               val frame = i / 32
-                 val bin = i % 32
-               melFrameBuffer[frame][bin]
-                                        }
-              val embTensor = ai.onnxruntime.OnnxTensor.createTensor(ortEnv,
-                  java.nio.FloatBuffer.wrap(embFlat), longArrayOf(1, 76, 32, 1))
-             val embResults = try {
-                                   embeddingSession?.run(mapOf("input_1" to embTensor))
-                                    } catch (e: Exception) {
-            Log.e("Jago", "Embedding model error: ${e.message}")
-           embTensor.close()
-          continue
-}
-val embVals = (embResults?.get(0)?.value as? Array<*>)?.get(0) as? FloatArray
-embTensor.close()
-embResults?.close()
-if (embVals == null) continue
+                }
+                val embTensor = ai.onnxruntime.OnnxTensor.createTensor(ortEnv, embInput)
+                var embFeatures: FloatArray? = null
+                try {
+                    val inputName = embeddingSession?.inputNames?.iterator()?.next() ?: "input"
+                    val results = embeddingSession?.run(mapOf(inputName to embTensor))
+                    (results?.get(0) as? ai.onnxruntime.OnnxTensor)?.floatBuffer?.let { fb ->
+                        embFeatures = FloatArray(fb.capacity()).apply { fb.get(this) }
+                    }
+                    results?.close()
+                } catch (e: Exception) {
+                    Log.e("Jago", "Embedding model error: ${e.message}")
+                    embTensor.close()
+                    continue
+                }
+                embTensor.close()
+                val features = embFeatures ?: continue
 
                 // STEP E — push embedding into rolling buffer
-                embeddingBuffer.addLast(embVals)
+                embeddingBuffer.addLast(features)
                 while (embeddingBuffer.size > EMBEDDING_FRAMES_NEEDED) embeddingBuffer.removeFirst()
                 if (embeddingBuffer.size < EMBEDDING_FRAMES_NEEDED) continue
 
                 // STEP F — wake word model
-                val wwFlat = FloatArray(EMBEDDING_FRAMES_NEEDED * 96) { i ->
-    embeddingBuffer[i / 96][i % 96]
-}
-val wwTensor = ai.onnxruntime.OnnxTensor.createTensor(ortEnv,
-    java.nio.FloatBuffer.wrap(wwFlat), longArrayOf(1, EMBEDDING_FRAMES_NEEDED.toLong(), 96))
-val wwResults = try {
-    wakeWordSession?.run(mapOf("input" to wwTensor))
-} catch (e: Exception) {
-    Log.e("Jago", "Wake word model error: ${e.message}")
-    wwTensor.close()
-    continue
-}
-val score = ((wwResults?.get(0)?.value as? Array<*>)?.get(0) as? FloatArray)?.get(0) ?: 0f
-wwTensor.close()
-wwResults?.close()
+                val wwInput = Array(1) {
+                    Array(EMBEDDING_FRAMES_NEEDED) { i -> embeddingBuffer[i] }
+                }
+                val wwTensor = ai.onnxruntime.OnnxTensor.createTensor(ortEnv, wwInput)
+                var score = 0f
+                try {
+                    val inputName = wakeWordSession?.inputNames?.iterator()?.next() ?: "input"
+                    val results = wakeWordSession?.run(mapOf(inputName to wwTensor))
+                    score = (results?.get(0) as? ai.onnxruntime.OnnxTensor)?.floatBuffer?.get(0) ?: 0f
+                    results?.close()
+                } catch (e: Exception) {
+                    Log.e("Jago", "Wake word model error: ${e.message}")
+                    wwTensor.close()
+                    continue
+                }
+                wwTensor.close()
                 if (score > 0.1f) Log.d("Jago", "Wake word score: $score")
 
-                if (score > 0.5f) {
+                if (score > 0.35f) {
                     Log.d("Jago", "JAGO DETECTED! Score: $score")
                     isDetecting = false
-                    cooldownFrames = 10
+                    cooldownFrames = 30
                     melFrameBuffer.clear()
                     embeddingBuffer.clear()
                     Handler(Looper.getMainLooper()).post { showOverlay() }
