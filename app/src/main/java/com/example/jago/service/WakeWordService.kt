@@ -31,6 +31,7 @@ class WakeWordService : Service() {
 
     companion object {
         var isServiceRunning = false
+        const val WAKE_WORD_ENABLED = false
     }
 
     // 3-model openWakeWord pipeline
@@ -60,6 +61,15 @@ class WakeWordService : Service() {
 
     // Battery Receiver
     private val batteryReceiver = com.example.jago.logic.BatteryReceiver()
+
+    private val activationReceiver = object : android.content.BroadcastReceiver() {
+        override fun onReceive(context: android.content.Context?, intent: Intent?) {
+            if (intent?.action == "com.example.jago.ACTIVATE_SAATHI") {
+                Log.d("WakeWordService", "Received ACTIVATE_SAATHI broadcast")
+                showOverlay()
+            }
+        }
+    }
 
     // Follow-up state
     private var isWaitingForReminderTime = false
@@ -99,7 +109,16 @@ class WakeWordService : Service() {
         registerReceiver(batteryReceiver, android.content.IntentFilter(Intent.ACTION_BATTERY_CHANGED))
         Log.d("WakeWordService", "BatteryReceiver registered")
         
-        initWakeWord()
+        if (WAKE_WORD_ENABLED) {
+            initWakeWord()
+        }
+        
+        val filter = android.content.IntentFilter("com.example.jago.ACTIVATE_SAATHI")
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(activationReceiver, filter, RECEIVER_NOT_EXPORTED)
+        } else {
+            registerReceiver(activationReceiver, filter)
+        }
     }
 
     private fun initWakeWord() {
@@ -903,6 +922,7 @@ class WakeWordService : Service() {
     }
 
     private fun resumeWakeWord() {
+        if (!WAKE_WORD_ENABLED) return
         serviceScope.launch {
             delay(1500)
             melFrameBuffer.clear()
@@ -948,6 +968,9 @@ class WakeWordService : Service() {
         serviceScope.cancel()
         try {
             unregisterReceiver(batteryReceiver)
+        } catch (e: Exception) {}
+        try {
+            unregisterReceiver(activationReceiver)
         } catch (e: Exception) {}
     }
 

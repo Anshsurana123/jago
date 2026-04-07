@@ -9,6 +9,8 @@ import android.accessibilityservice.AccessibilityServiceInfo
 
 class JagoAccessibilityService : AccessibilityService() {
 
+    private var lastVolumeDownTime: Long = 0L
+
     companion object {
         private var instance: JagoAccessibilityService? = null
         private var targetApp: String? = null
@@ -791,6 +793,30 @@ class JagoAccessibilityService : AccessibilityService() {
     override fun onKeyEvent(event: android.view.KeyEvent?): Boolean {
         if (event != null) {
             Log.d("JagoAccessibility", "Key Event: ${event.keyCode}, Action: ${event.action}")
+            
+            if (event.keyCode == android.view.KeyEvent.KEYCODE_VOLUME_DOWN && event.action == android.view.KeyEvent.ACTION_DOWN) {
+                val currentTime = System.currentTimeMillis()
+                if (currentTime - lastVolumeDownTime < 500) {
+                    Log.d("JagoAccessibility", "Volume Down Double Press Detected. Activating Saathi.")
+                    lastVolumeDownTime = 0L
+                    
+                    if (!com.example.jago.service.WakeWordService.isServiceRunning) {
+                        try {
+                            startForegroundService(Intent(this, com.example.jago.service.WakeWordService::class.java))
+                        } catch (e: Exception) {
+                            Log.e("JagoAccessibility", "Failed to start WakeWordService", e)
+                        }
+                    }
+                    
+                    sendBroadcast(Intent("com.example.jago.ACTIVATE_SAATHI").apply {
+                        setPackage(packageName)
+                    })
+                    return true // Consume the event
+                } else {
+                    lastVolumeDownTime = currentTime
+                }
+            }
+
             if (event.keyCode == android.view.KeyEvent.KEYCODE_BACK && event.action == android.view.KeyEvent.ACTION_DOWN) {
                 if (com.example.jago.logic.JagoTTS.isSpeaking) {
                     Log.d("JagoAccessibility", "Back button detected")
