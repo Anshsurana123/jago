@@ -74,7 +74,7 @@ dependencies {
     implementation("org.tensorflow:tensorflow-lite-support:0.4.3") // Adding support for FileUtil
 
     // ONNX Runtime
-    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.16.0")
+    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.18.0")
 
     // Google AI (Gemini)
     implementation("com.google.ai.client.generativeai:generativeai:0.9.0")
