@@ -31,7 +31,7 @@ class WakeWordService : Service() {
 
     companion object {
         var isServiceRunning = false
-        const val WAKE_WORD_ENABLED = false
+        const val WAKE_WORD_ENABLED = true
     }
 
     // 3-model openWakeWord pipeline
@@ -184,8 +184,8 @@ class WakeWordService : Service() {
                     continue
                 }
 
-                // STEP A — convert raw PCM to float [-1, 1]
-                val floatChunk = FloatArray(CHUNK_SIZE) { chunkBuffer[it] / 32768f }
+                // STEP A — convert raw PCM to int16 range float (openWakeWord expects -32768 to 32767)
+                val floatChunk = FloatArray(CHUNK_SIZE) { chunkBuffer[it].toFloat() }
 
                 // STEP B — melspectrogram via ONNX (properly isolated try/finally)
                 val melArray: List<FloatArray>?
@@ -267,7 +267,8 @@ class WakeWordService : Service() {
                 wwTensor.close()
                 if (score > 0.1f) Log.d("Jago", "Wake word score: $score")
 
-                if (score > 0.35f) {
+                // Reverted back to 0.80f now that input scaling is fixed
+                if (score > 0.80f) {
                     Log.d("Jago", "JAGO DETECTED! Score: $score")
                     isDetecting = false
                     cooldownFrames = 30
