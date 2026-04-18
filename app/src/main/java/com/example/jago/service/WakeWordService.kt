@@ -34,7 +34,7 @@ class WakeWordService : Service() {
         const val WAKE_WORD_ENABLED = true
     }
 
-    // 3-model openWakeWord pipeline
+    // 3-model openWakeWord / NanoWakeWord pipeline
     private var melSession: OrtSession? = null
     private var embeddingSession: OrtSession? = null
     private var wakeWordSession: OrtSession? = null
@@ -49,10 +49,16 @@ class WakeWordService : Service() {
     private val melFrameBuffer = ArrayDeque<FloatArray>()
     private val embeddingBuffer = ArrayDeque<FloatArray>()
     
+    // Score smoothing
+    private var scoreHistory = ArrayDeque<Float>()
+    private val SCORE_HISTORY_SIZE = 4   // window size for sustained detection
+    private val RAW_SCORE_THRESHOLD = 0.85f  // extremely strict raw score (jaagrut hits 0.99+)
+    private val MIN_HITS_TO_TRIGGER = 3      // requires sustained high scores (3/4 frames) to reject substrings like "jaag"
+    
     // Pipeline constants
     private val CHUNK_SIZE = 1280          // 80ms at 16kHz
-    private val MEL_FRAMES_NEEDED = 76     // mel frames per embedding
-    private val EMBEDDING_FRAMES_NEEDED = 16 // embeddings per wake word decision
+    private val MEL_FRAMES_NEEDED = 76     // mel frames for embedding input
+    private val EMBEDDING_FRAMES_NEEDED = 16 // embeddings for wake word input
     
     private var speechAdapter: SpeechAdapter? = null
     private var actionExecutor: ActionExecutor? = null
@@ -123,19 +129,21 @@ class WakeWordService : Service() {
 
     private fun initWakeWord() {
         try {
-            // Mel → ONNX (this is what openWakeWord actually uses)
+            // Mel spectrogram ONNX
             val melBytes = assets.open("melspectrogram.onnx").readBytes()
             melSession = ortEnv.createSession(melBytes, OrtSession.SessionOptions())
     
-            // Embedding + wake word → TFLite
+            // Embedding ONNX (extracts 96-dim features from 76 mel frames)
             val embBytes = assets.open("embedding_model.onnx").readBytes()
             embeddingSession = ortEnv.createSession(embBytes, OrtSession.SessionOptions())
+
+            // LSTM wake word ONNX (evaluates 16 embedding frames)
             val wwBytes = assets.open("jaag_ruut.onnx").readBytes()
             wakeWordSession = ortEnv.createSession(wwBytes, OrtSession.SessionOptions())
     
             isDetecting = true
             startAudioCapture()
-            Log.d("Jago", "openWakeWord pipeline initialized ✓")
+            Log.d("Jago", "NanoWakeWord 3-model pipeline initialized ✓")
         } catch (e: Exception) {
             Log.e("Jago", "Failed to init wake word models", e)
         }
@@ -184,18 +192,27 @@ class WakeWordService : Service() {
                     continue
                 }
 
-                // STEP A — convert raw PCM to int16 range float (openWakeWord expects -32768 to 32767)
-                val floatChunk = FloatArray(CHUNK_SIZE) { chunkBuffer[it].toFloat() }
+                // STEP A — convert raw PCM to float (use actual read count, not CHUNK_SIZE)
+                val floatChunk = FloatArray(read) { chunkBuffer[it].toFloat() }
 
-                // STEP B — melspectrogram via ONNX (properly isolated try/finally)
+                // Compute RMS for energy gate (used later, AFTER mel processing)
+                val rms = Math.sqrt(floatChunk.map { it * it }.average()).toFloat()
+
+                // Pad to CHUNK_SIZE for mel model if needed
+                val paddedChunk = if (floatChunk.size < CHUNK_SIZE) {
+                    FloatArray(CHUNK_SIZE).also { arr -> floatChunk.copyInto(arr) }
+                } else floatChunk
+
+                // STEP B — melspectrogram via ONNX (ALWAYS run to keep mel buffer continuous)
                 val melArray: List<FloatArray>?
                 val inputTensor = ai.onnxruntime.OnnxTensor.createTensor(
                     ortEnv,
-                    java.nio.FloatBuffer.wrap(floatChunk),
+                    java.nio.FloatBuffer.wrap(paddedChunk),
                     longArrayOf(1, 1280)
                 )
                 try {
-                    val melResults = melSession?.run(mapOf("input" to inputTensor))
+                    val melInputName = melSession?.inputNames?.iterator()?.next() ?: "input"
+                    val melResults = melSession?.run(mapOf(melInputName to inputTensor))
                     melArray = (melResults?.get(0)?.value as? Array<*>)
                         ?.let { it[0] as? Array<*> }
                         ?.let { it[0] as? Array<*> }
@@ -206,49 +223,58 @@ class WakeWordService : Service() {
                     inputTensor.close()
                     continue
                 }
-                inputTensor.close() // always close after try block
+                inputTensor.close()
 
                 if (melArray == null) continue
 
-                // STEP C — normalize and push mel frames into rolling buffer
+                // STEP C — push scaled mel frames into rolling buffer (openWakeWord scaling)
                 for (melFrame in melArray) {
-                    val normalized = FloatArray(melFrame.size) { i -> (melFrame[i] / 10f) + 2f }
-                    melFrameBuffer.addLast(normalized)
+                    val scaled = FloatArray(melFrame.size) { i -> (melFrame[i] / 10.0f) + 2.0f }
+                    melFrameBuffer.addLast(scaled)
                 }
+                // 1280 samples = 80ms = exactly 8 mel frames added.
+                // We slide the window by removing the oldest 8.
                 while (melFrameBuffer.size > MEL_FRAMES_NEEDED) melFrameBuffer.removeFirst()
+
+                // Validate mel output shape
+                if (melFrameBuffer.size == MEL_FRAMES_NEEDED && melFrameBuffer[0].size != 32) {
+                    Log.e("Jago", "MEL SHAPE MISMATCH — got ${melFrameBuffer[0].size} bins, expected 32.")
+                }
+
                 if (melFrameBuffer.size < MEL_FRAMES_NEEDED) continue
 
-                // STEP D — embedding model
+                // STEP D — embedding model (shape [1, 76, 32, 1])
                 val embInput = Array(1) {
-                    Array(MEL_FRAMES_NEEDED) { frameIdx ->
-                        Array(32) { binIdx ->
-                            FloatArray(1) { melFrameBuffer[frameIdx][binIdx] }
+                    Array(MEL_FRAMES_NEEDED) { f ->
+                        Array(32) { m ->
+                            FloatArray(1) { melFrameBuffer[f][m] }
                         }
                     }
                 }
                 val embTensor = ai.onnxruntime.OnnxTensor.createTensor(ortEnv, embInput)
-                var embFeatures: FloatArray? = null
+                var embOutput: FloatArray? = null
                 try {
-                    val inputName = embeddingSession?.inputNames?.iterator()?.next() ?: "input"
-                    val results = embeddingSession?.run(mapOf(inputName to embTensor))
-                    (results?.get(0) as? ai.onnxruntime.OnnxTensor)?.floatBuffer?.let { fb ->
-                        embFeatures = FloatArray(fb.capacity()).apply { fb.get(this) }
+                    val embInputName = embeddingSession?.inputNames?.iterator()?.next() ?: "input"
+                    val embResults = embeddingSession?.run(mapOf(embInputName to embTensor))
+                    (embResults?.get(0) as? ai.onnxruntime.OnnxTensor)?.floatBuffer?.let { fb ->
+                        embOutput = FloatArray(fb.capacity()).apply { fb.get(this) }
                     }
-                    results?.close()
+                    embResults?.close()
                 } catch (e: Exception) {
                     Log.e("Jago", "Embedding model error: ${e.message}")
                     embTensor.close()
                     continue
                 }
                 embTensor.close()
-                val features = embFeatures ?: continue
+                
+                if (embOutput == null) continue
 
-                // STEP E — push embedding into rolling buffer
-                embeddingBuffer.addLast(features)
+                embeddingBuffer.addLast(embOutput!!)
                 while (embeddingBuffer.size > EMBEDDING_FRAMES_NEEDED) embeddingBuffer.removeFirst()
+
                 if (embeddingBuffer.size < EMBEDDING_FRAMES_NEEDED) continue
 
-                // STEP F — wake word model
+                // STEP E — wake word model (shape [1, 16, 96])
                 val wwInput = Array(1) {
                     Array(EMBEDDING_FRAMES_NEEDED) { i -> embeddingBuffer[i] }
                 }
@@ -265,15 +291,22 @@ class WakeWordService : Service() {
                     continue
                 }
                 wwTensor.close()
-                if (score > 0.1f) Log.d("Jago", "Wake word score: $score")
 
-                // Reverted back to 0.80f now that input scaling is fixed
-                if (score > 0.80f) {
-                    Log.d("Jago", "JAGO DETECTED! Score: $score")
+                // Count-based triggering over last 5 frames — rejects short substrings like "jaag"
+                // and requires sustained high scores from the full "jaagrut"
+                scoreHistory.addLast(score)
+                while (scoreHistory.size > SCORE_HISTORY_SIZE) scoreHistory.removeFirst()
+                val hitCount = scoreHistory.count { it > RAW_SCORE_THRESHOLD }
+
+                if (score > 0.1f) Log.d("Jago", "LSTM score: $score | hits: $hitCount/${scoreHistory.size}")
+
+                // STEP F — trigger if at least 4 out of 5 recent frames exceeded raw threshold
+                if (scoreHistory.size >= SCORE_HISTORY_SIZE && hitCount >= MIN_HITS_TO_TRIGGER) {
+                    Log.d("Jago", "WAKE WORD DETECTED — raw: $score | hits: $hitCount/$SCORE_HISTORY_SIZE")
                     isDetecting = false
-                    cooldownFrames = 30
+                    cooldownFrames = 60           // 60 × 80ms = 4.8 seconds cooldown
                     melFrameBuffer.clear()
-                    embeddingBuffer.clear()
+                    scoreHistory.clear()          // reset after trigger
                     Handler(Looper.getMainLooper()).post { showOverlay() }
                 }
             }
@@ -281,6 +314,7 @@ class WakeWordService : Service() {
             audioRecord?.stop()
             audioRecord?.release()
             audioRecord = null
+            audioThread = null  // clear dead reference so resumeWakeWord doesn't try to interrupt a dead thread
         }
 
         audioThread?.start()
@@ -824,6 +858,7 @@ class WakeWordService : Service() {
                 messageBody = cleanBody
             )
             actionExecutor?.execute(finalCommand)
+            hideOverlayWithDelay()
         }
     }
 
@@ -928,6 +963,7 @@ class WakeWordService : Service() {
             delay(1500)
             melFrameBuffer.clear()
             embeddingBuffer.clear()
+            scoreHistory.clear()
             try {
                 if (audioRecord?.state == AudioRecord.STATE_INITIALIZED) {
                     audioRecord?.startRecording()
