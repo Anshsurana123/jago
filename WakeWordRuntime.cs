@@ -1,4 +1,5 @@
-﻿using System.Security.Cryptography;
+// Required Notice: Copyright 2026 Ansh. (https://github.com/Anshsurana123/jago)
+using System.Security.Cryptography;
 using Microsoft.ML.OnnxRuntime;
 using Microsoft.ML.OnnxRuntime.Tensors;
 using System.Text;

@@ -1,4 +1,5 @@
-﻿using System.Reflection;
+// Required Notice: Copyright 2026 Ansh. (https://github.com/Anshsurana123/jago)
+using System.Reflection;
 
 namespace NanoWakeWord;
 

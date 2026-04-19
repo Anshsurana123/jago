@@ -1,3 +1,4 @@
+// Required Notice: Copyright 2026 Ansh. (https://github.com/Anshsurana123/jago)
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")

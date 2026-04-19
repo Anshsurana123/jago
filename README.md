@@ -1,3 +1,4 @@
+<!-- Required Notice: Copyright 2026 Ansh. (https://github.com/Anshsurana123/jago) -->
 <p align="center">
   <img src="https://img.shields.io/badge/Platform-Android-3ddc84?logo=android&logoColor=white&style=for-the-badge" />
   <img src="https://img.shields.io/badge/Language-Kotlin-7F52FF?logo=kotlin&logoColor=white&style=for-the-badge" />

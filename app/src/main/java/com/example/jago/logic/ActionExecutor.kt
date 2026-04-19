@@ -1,3 +1,4 @@
+// Required Notice: Copyright 2026 Ansh. (https://github.com/Anshsurana123/jago)
 package com.example.jago.logic
 
 import android.Manifest

@@ -1,3 +1,4 @@
+<!-- Required Notice: Copyright 2026 Ansh. (https://github.com/Anshsurana123/jago) -->
 # Manual Device Test Guide
 
 ## 1. Wake Word Latency

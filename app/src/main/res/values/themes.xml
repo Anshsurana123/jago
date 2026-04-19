@@ -1,3 +1,4 @@
+<!-- Required Notice: Copyright 2026 Ansh. (https://github.com/Anshsurana123/jago) -->
 <resources xmlns:tools="http://schemas.android.com/tools">
     <!-- Base application theme. -->
     <style name="Theme.JagoAssistant" parent="Theme.MaterialComponents.DayNight.DarkActionBar">
